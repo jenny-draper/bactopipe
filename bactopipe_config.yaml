@@ -1,0 +1,273 @@
+# BACTOPIPE Configuration File
+# ==============================================================================================
+# 
+# This YAML configuration file defines the bacterial genomic analysis workflow for bactopipe.py.
+# It specifies tool parameters, commands, execution modes, dependencies, and resource settings
+# for processing ONT whole genome sequencing data through assembly, annotation, and analysis.
+#
+# Used by: bactopipe.py (main pipeline runner)
+# Purpose: Configurable bacterial genome analysis workflow
+# Author: Jenny L Draper
+# Date: October 2025
+
+
+# Global settings
+settings:
+  default_parallel: 10
+  default_execution_mode: batch
+  allow_failed_sample_ids: ["NEG"]
+  default_outdir: "/data/runs/ont/analysis/{runid}"
+  default_sample_file: "{rundir}/samples.tsv"
+  default_assembly_path: "/data/runs/ont/analysis/{runid}/assembly/{sample_id}.fa"
+  sample_id_column: "SAMPLE_ID"  # Column name containing sample IDs
+  version: 0.1
+  # Note that {script_dir} is auto-defined as the directory containing bactopipe.py
+
+# Setup commands for new runs when using runid (-r) mode
+setup_commands:
+  - "mkdir -p {rundir}"
+  - "cp /data/runs/ont/qc/{runid}/{runid}.sample_taxid.tsv {rundir}/samples.tsv"
+
+tools:
+
+  assembly:
+    description: "Autocycler assembly with dragonflye fallback"
+    execution_mode: per_sample
+    parallel: 10  
+    modules:
+      - dragonflye
+      - trycycler
+    tool_path: "{script_dir}/run_assembly.sh"
+    version_cmd: "bash {tool_path} --version"
+    command: "bash {tool_path} {sample_id} {runid}"
+    sample_output_file: "{rundir}/assembly/{sample_id}.unpolished.fa"
+    output_dir: "{rundir}/assembly"
+    sub_tools:
+      - name: "dragonflye_auto"
+        version_cmd: "dragonflye_auto --version"
+      - name: "dragonflye"
+        version_cmd: "dragonflye --version"
+
+  medaka:
+    description: "Medaka polishing per sample"
+    execution_mode: per_sample
+    parallel: 2  
+    modules:
+      - medaka
+    tool_path: "{script_dir}/run_medaka.sh"
+    version_cmd: "bash {tool_path} --version"
+    output_dir: "{rundir}/assembly/medaka"
+    sample_output_dir: "{rundir}/assembly/medaka/{sample_id}"
+    sample_output_file: "{rundir}/assembly/{sample_id}.fa"
+    required_files:
+      - "{rundir}/assembly/{sample_id}.unpolished.fa"
+    command: |
+      bash {tool_path} {sample_id} {runid} \
+        {rundir}/assembly/{sample_id}.unpolished.fa \
+        /data/runs/ont/qc/{runid}/fastq_pass_concatenated/{sample_id}.fastq.gz
+    post_commands:       
+      # Consolidate assembly logs (use append to avoid overwriting on reruns)
+      - |
+        mkdir -p {rundir}/assembly/logs && find {rundir}/assembly -maxdepth 1 -name '*.log' \
+          -exec sh -c 'cat "$1" >> "{rundir}/assembly/logs/$(basename "$1")" && rm "$1"' _ {} \; \
+          2>/dev/null || true
+      - |
+        [ -f {rundir}/medaka/medaka.log ] && 
+        cat {rundir}/medaka/medaka.log >> {rundir}/assembly/logs/medaka.log && 
+        rm {rundir}/medaka/medaka.log && rmdir {rundir}/medaka 2>/dev/null || true
+
+  prokka:
+    description: "Prokka annotation of assembly"
+    db_cmd: "prokka --listdb 2>&1 | head -1 | grep -o '/[^[:space:]]*'"
+    modules:
+      - prokka
+    execution_mode: per_sample
+    parallel: 20  
+    output_dir: "{rundir}/prokka"
+    sample_output_dir: "{rundir}/prokka/{sample_id}"
+    sample_output_file: "{rundir}/prokka/{sample_id}/{sample_id}.gff"
+    required_files:
+      - "{assembly_file}"
+    command: |
+      cd {rundir}/prokka/{sample_id} &&
+      prokka --metagenome {assembly_file} --outdir . --prefix {sample_id} --force
+     # note: --metagenome mode is better at calling broad-host plasmid ORFs (important for AMR!)
+
+  abritamr:
+    description: "ABRicate antimicrobial resistance analysis"
+    db_cmd: "grep 'Checking for amrfinder DB:' {output_dir}/abritamr.log | head -1 | sed 's/.*DB: \\([^ ]*\\) and.*/\\1/'"
+    modules:
+      - abritamr/1.0.17
+    execution_mode: batch
+    output_dir: "{rundir}/abritamr"
+    output_file: "{rundir}/abritamr/abritamr.txt"
+    pre_commands:
+      - |
+        # Create abritamr input file mapping sample IDs to assembly paths
+        awk 'NR>1 {
+          assembly = "{rundir}/assembly/" $2 ".fa"
+          if (system("test -f " assembly) == 0) print $2 "\t" assembly
+          else print "WARNING: assembly " assembly " not found, skipping" > "/dev/stderr"
+        }' {rundir}/samples.tsv > {rundir}/abritamr/abritamr_input.tsv
+    command: |
+      cd {rundir}/abritamr &&
+      sample_n=$(wc -l {rundir}/abritamr/abritamr_input.tsv | cut -d' ' -f1) &&
+      abritamr run --contigs {rundir}/abritamr/abritamr_input.tsv --jobs $sample_n
+    post_commands:
+      # Cleanup empty and meaningless log files from abritamr puts everywhere
+      - "find {rundir} -name update_abritamr_db.log -type f -empty -delete 2>/dev/null || true"
+
+  mlst:
+    description: "Multi-locus sequence typing"
+    db_path: "/data/db/mlst_custom"
+    modules:
+      - nullarbor/2.0.20191013
+    execution_mode: batch
+    output_dir: "{rundir}/mlst"
+    output_file: "{rundir}/mlst/mlst.csv"
+    command: |
+      assemblies="$(find {rundir}/assembly -name "*.fa" ! -name "*unpolished*" -type f)"
+      mlst --csv --nopath \
+        --blastdb {db_path}/blast/mlst.fa \
+        --datadir {db_path}/pubmlst \
+        $assemblies > {rundir}/mlst/mlst.csv &&
+      sed -i 's/-dragonflye[^,]*\.fa//g' {rundir}/mlst/mlst.csv
+
+
+  plasmidfinder:
+    description: "PlasmidFinder plasmid identification"
+    version_cmd: "echo 'plasmidfinder 2.1.6'"
+    db_cmd: "grep '^PLASMIDFINDER_SHARE=' {tool_path} | cut -d'=' -f2 | tr -d '\"'"
+    tool_path: "/opt/conda/envs/plasmidfinder_2.1.6/bin/plasmidfinder.py"
+    modules:
+      - plasmidfinder/2.1.6
+    execution_mode: per_sample
+    parallel: 20
+    output_dir: "{rundir}/plasmidfinder"
+    output_file: "{rundir}/plasmidfinder/plasmidfinder_results.tsv"
+    sample_output_dir: "{rundir}/plasmidfinder/{sample_id}"
+    sample_output_file: "{rundir}/plasmidfinder/{sample_id}/results_tab.tsv"
+    required_files:
+      - "{assembly_file}"
+    command: |
+      python {tool_path} -x \
+        -i {assembly_file} \
+        -o {rundir}/plasmidfinder/{sample_id}
+    post_commands:
+      # Cleanup & create merged plasmidfinder results with sample IDs
+      - "rm -rf {rundir}/plasmidfinder/*/tmp"
+      - |
+        echo -e "Sample\tPlasmid\tIdentity\tQuery/Template length\tContig\tPosition in contig\tNote\tAccession number" \
+          > {rundir}/plasmidfinder/plasmidfinder_results.tsv
+        tail -n +2 {rundir}/samples.tsv | cut -f2 | while read id; do
+          resfile="{rundir}/plasmidfinder/$id/results_tab.tsv"
+          if [ -f "$resfile" ]; then
+            awk -v id="$id" 'NR>1 {print id "\t" $0}' "$resfile"
+          else
+            printf "%s\t\t\t\t\t\t\t\t\n" "$id"
+          fi
+        done >> {rundir}/plasmidfinder/plasmidfinder_results.tsv
+
+  checkm:
+    description: "CheckM quality assessment"
+    version_cmd: "checkm -h | grep -o 'CheckM v[0-9.]*'"
+    db_cmd: "which checkm | sed 's|/bin/checkm$|/checkm_data|'"
+    modules:
+      - checkm-genome
+    execution_mode: per_sample
+    parallel: 10  
+    output_dir: "{rundir}/checkm"
+    output_file: "{rundir}/checkm/checkm_results.tsv"
+    sample_output_dir: "{rundir}/checkm/{sample_id}"
+    sample_output_file: "{rundir}/checkm/{sample_id}/checkm_result.tsv"
+    required_files:
+      - "{assembly_file}"
+    command: |
+      # prepare checkm output dir
+        for d in bins contigs logs storage; do mkdir -p {rundir}/checkm/{sample_id}/$d; done
+        ln -sf {assembly_file} {rundir}/checkm/{sample_id}/contigs/{sample_id}.fna
+
+      # run checkm lineage & qa workflows
+        checkm lineage_wf -t 16 -x fna --reduced_tree \
+          {rundir}/checkm/{sample_id}/contigs {rundir}/checkm/{sample_id} &&
+        cd {rundir}/checkm/{sample_id} &&
+        checkm qa -o 2 {rundir}/checkm/{sample_id}/lineage.ms . \
+          --tab_table -f {rundir}/checkm/{sample_id}/checkm_result.tsv
+    post_commands:
+      # Create merged checkm result file
+      - |
+        echo -e "Bin Id\tMarker lineage\t# genomes\t# markers\t# marker sets\tCompleteness\tContamination\tStrain heterogeneity\tGenome size (bp)\t# ambiguous bases\t# scaffolds\t# contigs\tN50 (scaffolds)\tN50 (contigs)\tMean scaffold length (bp)\tMean contig length (bp)\tLongest scaffold (bp)\tLongest contig (bp)\tGC\tGC std (scaffolds > 1kbp)\tCoding density\tTranslation table\t# predicted genes\t0\t1\t2\t3\t4\t5+" \
+          > {rundir}/checkm/checkm_results.tsv &&
+        for id in $(tail -n +2 {rundir}/samples.tsv | cut -f2); do
+          resfile="{rundir}/checkm/$id/checkm_result.tsv"
+          if [ -f "$resfile" ]; then
+            tail -1 "$resfile" >> {rundir}/checkm/checkm_results.tsv
+          else
+            echo "WARNING: no checkm result found for sample $id" >&2
+          fi
+        done
+
+  padloc:
+    description: "PADLOC defense system identification"
+    db_cmd: "which padloc | sed 's|/bin/padloc$|/data|'"
+    modules:
+      - padloc
+    execution_mode: per_sample
+    parallel: 20
+    output_dir: "{rundir}/padloc"
+    output_file: "{rundir}/padloc/padloc_summary.tsv"
+    sample_output_dir: "{rundir}/padloc/{sample_id}"
+    sample_output_file: "{rundir}/padloc/{sample_id}/{sample_id}_padloc.csv"
+    required_files:
+      - "{rundir}/prokka/{sample_id}/{sample_id}.faa"
+      - "{rundir}/prokka/{sample_id}/{sample_id}.gff"
+    command: |
+      padloc --faa {rundir}/prokka/{sample_id}/{sample_id}.faa \
+        --gff {rundir}/prokka/{sample_id}/{sample_id}.gff \
+        --cpu 8 --outdir {rundir}/padloc/{sample_id} 2>&1
+    post_commands:
+      # Create merged padloc result file
+      - |
+        echo -e "SAMPLE_ID\tsystem.number\tseqid\tsystem\ttarget.name\thmm.accession\thmm.name\tprotein.name\tfull.seq.E.value\tdomain.iE.value\ttarget.coverage\thmm.coverage\tstart\tend\tstrand\ttarget.description\trelative.position\tcontig.end\tall.domains\tbest.hits" \
+          > {rundir}/padloc/padloc_summary.tsv &&
+        for id in $(tail -n +2 {rundir}/samples.tsv | cut -f2); do
+          resfile="{rundir}/padloc/$id/${id}_padloc.csv"
+          if [ -f "$resfile" ]; then
+            awk -v id="$id" 'NR>1 { gsub(",", "\t"); print id "\t" $0 }' "$resfile" >> {rundir}/padloc/padloc_summary.tsv
+          else
+            echo "WARNING: no padloc result found for $id" >&2 &&
+            echo -e "$id\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t" >> {rundir}/padloc/padloc_summary.tsv
+          fi
+        done
+
+  parse_plasmids:
+    description: "Parse plasmid results into summary table"
+    version_cmd: "python3 {tool_path} --version"
+    tool_path: "{script_dir}/parse_plasmids.py"
+    modules:
+      - python
+    execution_mode: batch
+    output_file: "{rundir}/{runid}.plasmid_contigs.tsv"
+    command: "python3 {tool_path} -r {runid}"
+
+  summarise:
+    description: "Generate final run summary"
+    version_cmd: "python3 {tool_path} --version"
+    tool_path: "{script_dir}/summarise_run.py"
+    modules:
+      - python
+    execution_mode: batch
+    output_file: "{rundir}/{runid}.summary.tsv"
+    command: "python3 {tool_path} -r {runid}"
+
+# Define tool dependencies (tools that must run before others)
+dependencies:
+  medaka: [assembly]
+  prokka: [medaka]
+  abritamr: [medaka]
+  mlst: [medaka]
+  plasmidfinder: [medaka]
+  checkm: [medaka]
+  padloc: [prokka]
+  parse_plasmids: [plasmidfinder]
+  summarise: [prokka, abritamr, mlst, plasmidfinder, checkm, padloc]
