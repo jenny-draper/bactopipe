@@ -90,6 +90,13 @@ barcode03	NEG	BC03	negative_control	Unclassified	0
 ### (Per bactopipe_config.yaml)
 
 ```mermaid
+%%{init: {
+  'flowchart': {
+    'nodeSpacing': 30,
+    'rankSpacing': 50,
+    'curve': 'basis'
+  }
+}}%%
 flowchart TD
     A[Input: samples.tsv] --> B[Pipeline Start]
     B --> C[Assembly: Autocycler /<br/> Dragonflye fallback]
@@ -364,43 +371,3 @@ BactoPipe includes intelligent resource monitoring and optimization:
 - **Configurable limits** with safety caps to prevent system overload
 
 Resource logs are saved to `{runid}.resource_usage.{timestamp}.tsv` for analysis.
-
-## Version History
-
-- **v2.0** (2025) - Complete refactor to YAML-based configuration
-  - Unified tool runner replacing individual scripts
-  - Parallel execution support
-  - Comprehensive logging and version tracking
-  - Intelligent skip detection
-  
-- **v1.0** (2024) - Original shell-script based pipeline
-  - Individual tool wrapper scripts
-  - Sequential execution
-
-
-### A note on the major pipeline refactoring from v1:
-The original pipeline was comprised of a bunch of individual `run_{tool}.sh` scripts that were all very similar, orchistrated by a master shell script. This update replaces these with per-tool entries in simple human-readable yaml-format config file, orchestrated by a python script (which makes handling the yaml easier). The config file explicitly defines the specific commands run for each tool, which makes these easy to look up to see what was run. Moving to a config-file based system greatly improves overall pipeline flexibility and makes it much easier to add new tools (just add a new entry to the config) or to change overall pipeline parameters like system paths or error handling.  
-
-## Key improvements
-- **Single configuration file** (`bactopipe_config.yaml`) defines all tools and parameters
-- **Unified tool runner** (`bactopipe.py`) replaces the many redundant individual run scripts
-- **Python-based runner** with better error handling and logging
-- **Configurable parallelism** parallel thread count now in the config instead of hardcoded per run script
-- **Better error handling** and logging
-- **Flexible execution** - run all tools or specific tool subsets
-- **Dependency management** handled in the per-tool config, easier to ensure tools run in correct order
-- **Consistent interface** across all analysis steps
-- **Consistent interface** across all analysis steps
-- **Single configuration file** (`bactopipe_config.yaml`) defines all tools and parameters
-- **Unified tool runner** (`bactopipe.py`) replaces the many redundant individual run scripts
-- **Python-based runner** with better error handling and logging
-- **Configurable parallelism** parallel thread count now in the config instead of hardcoded per run script
-- **Better error handling** and logging
-- **Flexible execution** - run all tools or specific tool subsets
-- **Dependency management** handled in the per-tool config, easier to ensure tools run in correct order
-- **Consistent interface** across all analysis steps
-- **Consistent interface** across all analysis steps
-- **Flexible execution** - run all tools or specific tool subsets
-- **Dependency management** handled in the per-tool config, easier to ensure tools run in correct order
-- **Consistent interface** across all analysis steps
-- **Consistent interface** across all analysis steps
