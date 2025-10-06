@@ -65,8 +65,7 @@ tools:
       bash {tool_path} {sample_id} {runid} \
         {rundir}/assembly/{sample_id}.unpolished.fa \
         /data/runs/ont/qc/{runid}/fastq_pass_concatenated/{sample_id}.fastq.gz
-    post_commands:       
-      # Consolidate assembly logs (use append to avoid overwriting on reruns)
+    post_commands:       #consolidate logs & clean up medaka dirs
       - |
         mkdir -p {rundir}/assembly/logs && find {rundir}/assembly -maxdepth 1 -name '*.log' \
           -exec sh -c 'cat "$1" >> "{rundir}/assembly/logs/$(basename "$1")" && rm "$1"' _ {} \; \
@@ -113,8 +112,7 @@ tools:
       cd {rundir}/abritamr &&
       sample_n=$(wc -l {rundir}/abritamr/abritamr_input.tsv | cut -d' ' -f1) &&
       abritamr run --contigs {rundir}/abritamr/abritamr_input.tsv --jobs $sample_n
-    post_commands:
-      # Cleanup empty and meaningless log files from abritamr puts everywhere
+    post_commands:   # delete the meaningless update_db log files created by abritamr
       - "find {rundir} -name update_abritamr_db.log -type f -empty -delete 2>/dev/null || true"
 
   mlst:

@@ -41,6 +41,11 @@ samples = pd.read_csv(rundir + "/samples.tsv", sep="\t")
 samples["RUNID"] = runid
 samples = samples[["RUNID", "SAMPLE_ID", "BARCODE", "EXPECTED_SPECIES", "IDENTIFED_SPECIES", "IDENTIFIED_GENOME_SIZE"]]
 
+# Remove any duplicates in the samples file
+if samples.duplicated(subset=['SAMPLE_ID']).any():
+    print(f"WARNING: Found duplicate SAMPLE_IDs in samples.tsv, keeping first occurrence")
+    samples = samples.drop_duplicates(subset=['SAMPLE_ID'], keep='first')
+
 # Get metrics values (N50, read count, total bases, etc) 
 print("collecting QC data")
 qc = pd.read_csv(qcdir + "/" + runid + ".qc_result_table.csv")
@@ -191,7 +196,15 @@ merged = pd.merge(merged, plasmids, on="SAMPLE_ID", how="left")
 print("collecting amr info")
 amr = pd.read_csv( rundir+"/abritamr/summary_matches.txt", sep="\t" )
 amr = amr.rename(columns={"Isolate": "SAMPLE_ID"})
-merged = pd.merge(merged, amr, on="SAMPLE_ID", how="left").dropna(how='all')
+merged = pd.merge(merged, amr, on="SAMPLE_ID", how="left")
+
+# Remove any duplicate rows that may have been created during merging
+merged = merged.drop_duplicates()
+
+# Drop rows that are all NaN (except for the key columns)
+key_columns = ["RUNID", "SAMPLE_ID", "BARCODE"]
+non_key_columns = [col for col in merged.columns if col not in key_columns]
+merged = merged.dropna(subset=non_key_columns, how='all')
 
 # Save results
 outfile = f"{rundir}/{runid}.summary.tsv"

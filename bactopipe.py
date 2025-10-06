@@ -523,6 +523,71 @@ class PipelineRunner:
         
         return memory_values, cpu_values
 
+    def create_versions_log(self):
+        """Create or update versions log file with tool versions."""
+        # Try base filename first (without timestamp)
+        base_log_filename = f"{self.runid}.versions.tsv"
+        versions_file = self.rundir / base_log_filename
+        
+        # If clean mode, remove any existing versions files and use base name
+        if self.clean:
+            # Remove any existing versions files (with or without timestamp)
+            for existing_file in self.rundir.glob(f"{self.runid}.versions*.tsv"):
+                existing_file.unlink()
+            log_filename = base_log_filename
+        # If base file exists and not in clean mode, add timestamp
+        elif versions_file.exists():
+            timestamp = self.get_filename_timestamp()
+            log_filename = f"{self.runid}.versions.{timestamp}.tsv"
+        else:
+            # First run - use base filename without timestamp
+            log_filename = base_log_filename
+        
+        versions_file = self.rundir / log_filename
+        pipeline_path = Path(__file__).absolute()
+        config_version = self.config.get('settings', {}).get('version', DEFAULTS['default_unknown_value'])
+        
+        with open(versions_file, 'w') as f:
+            f.write("tool\tversion\tpath\tdatabase\n")
+            f.write(f"run_pipeline.py\t{VERSION}\t{pipeline_path}\t{DEFAULTS['default_database_value']}\n")
+            f.write(f"bactopipe_config.yaml\t{config_version}\t{self.config_file}\t{DEFAULTS['default_database_value']}\n")
+        
+        # Store the filename for later reference
+        self.versions_file = versions_file
+        return versions_file
+
+    def create_resource_log(self):
+        """Create resource usage log file."""
+        if not self.monitor:
+            return None
+            
+        # Try base filename first (without timestamp)
+        base_log_filename = f"{self.runid}.resource_usage.tsv"
+        resource_file = self.rundir / base_log_filename
+        
+        # If clean mode, remove any existing resource files and use base name
+        if self.clean:
+            # Remove any existing resource files (with or without timestamp)
+            for existing_file in self.rundir.glob(f"{self.runid}.resource_usage*.tsv"):
+                existing_file.unlink()
+            log_filename = base_log_filename
+        # If base file exists and not in clean mode, add timestamp
+        elif resource_file.exists():
+            timestamp = self.get_filename_timestamp()
+            log_filename = f"{self.runid}.resource_usage.{timestamp}.tsv"
+        else:
+            # First run - use base filename without timestamp
+            log_filename = base_log_filename
+            
+        resource_file = self.rundir / log_filename
+        with open(resource_file, 'w') as f:
+            f.write("tool\texecution_mode\tmeasurement_count\tmean_memory_gb\tmax_memory_gb\tmean_cpu_cores\tmax_cpu_cores\truntime_seconds\t")
+            f.write("current_threads\tsuggested_threads\tmemory_t_recommended\tmemory_t_limit\tcpu_t_recommended\tcpu_t_limit\tbottleneck\tmem_total_percent\tcpu_total_percent\n")
+        
+        # Store the filename for later reference
+        self.resource_file = resource_file
+        return resource_file
+
     def _report_resource_usage(self, tool_name: str, execution_mode: str, runtime: float, memory_values: List[float], cpu_values: List[float]):
         """Report and store resource usage data."""
         if self.monitor and memory_values:
@@ -668,70 +733,69 @@ class PipelineRunner:
             'cpu_total_percent': round((suggested * max_cpu_cores / available_cores * 100), 1)
         }
 
-    def create_versions_log(self):
-        """Create or update versions log file with tool versions."""
-        # Try base filename first (without timestamp)
-        base_log_filename = f"{self.runid}.versions.tsv"
-        versions_file = self.rundir / base_log_filename
-        
-        # If clean mode, remove any existing versions files and use base name
-        if self.clean:
-            # Remove any existing versions files (with or without timestamp)
-            for existing_file in self.rundir.glob(f"{self.runid}.versions*.tsv"):
-                existing_file.unlink()
-            log_filename = base_log_filename
-        # If base file exists and not in clean mode, add timestamp
-        elif versions_file.exists():
-            timestamp = self.get_filename_timestamp()
-            log_filename = f"{self.runid}.versions.{timestamp}.tsv"
-        else:
-            # First run - use base filename without timestamp
-            log_filename = base_log_filename
-        
-        versions_file = self.rundir / log_filename
-        pipeline_path = Path(__file__).absolute()
-        config_version = self.config.get('settings', {}).get('version', DEFAULTS['default_unknown_value'])
-        
-        with open(versions_file, 'w') as f:
-            f.write("tool\tversion\tpath\tdatabase\n")
-            f.write(f"run_pipeline.py\t{VERSION}\t{pipeline_path}\t{DEFAULTS['default_database_value']}\n")
-            f.write(f"bactopipe_config.yaml\t{config_version}\t{self.config_file}\t{DEFAULTS['default_database_value']}\n")
-        
-        # Store the filename for later reference
-        self.versions_file = versions_file
-        return versions_file
+    def get_system_resources(self) -> Dict[str, Any]:
+        """Query system resources and return available CPU cores and memory."""
+        resources = {'cpu_cores': 'unknown', 'logical_cores': 'unknown', 'memory_gb': 'unknown'}
 
-    def create_resource_log(self):
-        """Create resource usage log file."""
-        if not self.monitor:
-            return None
+        try:
+            # Get logical cores from nproc
+            result = subprocess.run(['nproc'], capture_output=True, text=True)
+            if result.returncode == 0:
+                resources['logical_cores'] = int(result.stdout.strip())
+                
+                # Try to get physical cores from lscpu
+                result = subprocess.run(['lscpu'], capture_output=True, text=True)
+                if result.returncode == 0:
+                    cores_per_socket = sockets = None
+                    for line in result.stdout.split('\n'):
+                        if line.startswith('Core(s) per socket:'):
+                            cores_per_socket = int(line.split(':')[1].strip())
+                        elif line.startswith('Socket(s):'):
+                            sockets = int(line.split(':')[1].strip())
+                    
+                    resources['cpu_cores'] = cores_per_socket * sockets if cores_per_socket and sockets else resources['logical_cores']
+                else:
+                    resources['cpu_cores'] = resources['logical_cores']
             
-        # Try base filename first (without timestamp)
-        base_log_filename = f"{self.runid}.resource_usage.tsv"
-        resource_file = self.rundir / base_log_filename
+            # Get memory info
+            result = subprocess.run(['free', '-b'], capture_output=True, text=True)
+            if result.returncode == 0:
+                for line in result.stdout.split('\n'):
+                    if line.startswith('Mem:'):
+                        resources['memory_gb'] = round(int(line.split()[1]) / (1024**3), 1)
+                        break
+        except Exception:
+            pass  # Keep unknown values
         
-        # If clean mode, remove any existing resource files and use base name
-        if self.clean:
-            # Remove any existing resource files (with or without timestamp)
-            for existing_file in self.rundir.glob(f"{self.runid}.resource_usage*.tsv"):
-                existing_file.unlink()
-            log_filename = base_log_filename
-        # If base file exists and not in clean mode, add timestamp
-        elif resource_file.exists():
-            timestamp = self.get_filename_timestamp()
-            log_filename = f"{self.runid}.resource_usage.{timestamp}.tsv"
-        else:
-            # First run - use base filename without timestamp
-            log_filename = base_log_filename
-            
-        resource_file = self.rundir / log_filename
-        with open(resource_file, 'w') as f:
-            f.write("tool\texecution_mode\tmeasurement_count\tmean_memory_gb\tmax_memory_gb\tmean_cpu_cores\tmax_cpu_cores\truntime_seconds\t")
-            f.write("current_threads\tsuggested_threads\tmemory_t_recommended\tmemory_t_limit\tcpu_t_recommended\tcpu_t_limit\tbottleneck\tmem_total_percent\tcpu_total_percent\n")
+        return resources
+
+    def parse_time_output(self, stderr: str) -> Tuple[float, float, float]:
+        """Parse /usr/bin/time -v output and return (peak_memory_gb, cpu_cores, user_time)."""
+        metrics = {'peak_memory_gb': 0.0, 'user_time': 0.0, 'system_time': 0.0, 'wall_time': 0.0}
         
-        # Store the filename for later reference
-        self.resource_file = resource_file
-        return resource_file
+        for line in stderr.split('\n'):
+            if 'Maximum resident set size (kbytes):' in line:
+                metrics['peak_memory_gb'] = float(line.split(':')[1].strip()) / 1024 / 1024
+            elif 'User time (seconds):' in line:
+                try:
+                    metrics['user_time'] = float(line.split(':')[1].strip())
+                except ValueError:
+                    pass
+            elif 'System time (seconds):' in line:
+                try:
+                    metrics['system_time'] = float(line.split(':')[1].strip())
+                except ValueError:
+                    pass
+            elif 'Elapsed (wall clock) time' in line:
+                # /usr/bin/time -v outputs in h:mm:ss.ss or m:ss.ss format
+                time_str = line.split('):', 1)[1].strip()
+                parts = [int(float(p)) if '.' not in p else float(p) for p in time_str.split(':')]
+                metrics['wall_time'] = sum(part * (60 ** (len(parts) - 1 - i)) for i, part in enumerate(parts))
+        
+        # Calculate average CPU cores used (total CPU time / wall time)
+        cpu_cores = (metrics['user_time'] + metrics['system_time']) / metrics['wall_time'] if metrics['wall_time'] > 0 else 0.0
+        
+        return metrics['peak_memory_gb'], cpu_cores, metrics['user_time']
 
     def setup_run_directory(self):
         """Execute setup commands for new run directory if in runid mode."""
@@ -918,78 +982,6 @@ class PipelineRunner:
         missing = [setting for setting in required_settings if setting not in settings]
         if missing:
             raise ValueError(f"Missing required config settings: {', '.join(missing)}")
-
-    def get_system_resources(self) -> Dict[str, Any]:
-        """Query system resources (CPU cores and memory)."""
-        try:
-            import psutil
-            cpu_cores = psutil.cpu_count(logical=False)
-            logical_cores = psutil.cpu_count(logical=True)
-            memory_gb = round(psutil.virtual_memory().total / (1024**3), 1)
-        except ImportError:
-            # Fallback methods if psutil not available
-            try:
-                import os
-                logical_cores = os.cpu_count()
-                cpu_cores = logical_cores  # Can't distinguish without psutil
-            except:
-                logical_cores = cpu_cores = DEFAULTS['default_unknown_value']
-            
-            try:
-                # Try to get memory from /proc/meminfo
-                with open('/proc/meminfo', 'r') as f:
-                    for line in f:
-                        if line.startswith('MemTotal:'):
-                            memory_kb = int(line.split()[1])
-                            memory_gb = round(memory_kb / (1024**2), 1)
-                            break
-                    else:
-                        memory_gb = DEFAULTS['default_unknown_value']
-            except:
-                memory_gb = DEFAULTS['default_unknown_value']
-        except:
-            cpu_cores = logical_cores = memory_gb = DEFAULTS['default_unknown_value']
-        
-        return {
-            'cpu_cores': cpu_cores,
-            'logical_cores': logical_cores,
-            'memory_gb': memory_gb
-        }
-
-    def parse_time_output(self, time_output: str) -> Tuple[float, float, float]:
-        """Parse /usr/bin/time -v output to extract resource usage."""
-        peak_memory_gb = 0.0
-        cpu_cores = 0.0
-        user_time = 0.0
-        
-        try:
-            for line in time_output.split('\n'):
-                line = line.strip()
-                if 'Maximum resident set size' in line:
-                    # Memory is in KB, convert to GB
-                    memory_kb = float(line.split(':')[1].strip())
-                    peak_memory_gb = memory_kb / (1024 * 1024)
-                elif 'User time' in line:
-                    user_time = float(line.split(':')[1].strip())
-                elif 'System time' in line:
-                    sys_time = float(line.split(':')[1].strip())
-                elif 'Elapsed (wall clock) time' in line:
-                    # Parse time format (h:mm:ss or mm:ss.ss)
-                    time_str = line.split(':')[1].strip()
-                    if time_str.count(':') == 2:  # h:mm:ss
-                        h, m, s = time_str.split(':')
-                        wall_time = float(h) * 3600 + float(m) * 60 + float(s)
-                    else:  # mm:ss.ss
-                        m, s = time_str.split(':')
-                        wall_time = float(m) * 60 + float(s)
-                    
-                    # Estimate CPU cores used (total CPU time / wall time)
-                    if wall_time > 0:
-                        cpu_cores = (user_time + sys_time) / wall_time
-        except:
-            pass  # Keep defaults if parsing fails
-        
-        return peak_memory_gb, cpu_cores, user_time
 
 def main():
     """Parse arguments and run pipeline."""
