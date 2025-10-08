@@ -9,7 +9,6 @@ Features parallel processing, resource monitoring, and
 intelligent dependency management.
 
 Author: Jenny L Draper
-Version: 1.0
 Date: October 2025
 
 Usage:
@@ -30,7 +29,7 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Any, Optional, Tuple
 
-VERSION = "1.0"
+VERSION = "1.1"
 
 # Default values for pipeline behavior
 DEFAULTS = {
@@ -135,7 +134,7 @@ class PipelineRunner:
     def print_startup_info(self):
         """Print startup banner with key information."""
         self.log("=" * 60, console=True, tool_log=False)
-        self.log(f"ONT Analysis Pipeline v{VERSION}", console=True, tool_log=False)
+        self.log(f"BactoPipe: Bacterial ONT Sequence Analysis Pipeline v{VERSION}", console=True, tool_log=False)
         self.log("=" * 60, console=True, tool_log=False)
         self.log(f"Command: {' '.join(sys.argv)}", console=True, tool_log=False)
         self.log(f"Run ID: {self.runid}", console=True, tool_log=False)
@@ -291,12 +290,17 @@ class PipelineRunner:
         if self.monitor and time_stats_path:
             final_command = f'/usr/bin/time -v -o {time_stats_path} bash -c {shlex.quote(base_command)}'
         else:
-            final_command = base_command
+            # Ensure we're using bash even without monitoring
+            final_command = f'bash -c {shlex.quote(base_command)}'
         
         # Add output redirection if we have a log file
         if target_log_file:
             final_command = f'{final_command} >> {target_log_file} 2>&1'
             result = subprocess.run(final_command, shell=True, executable='/bin/bash')
+            
+            # Log the exit code for debugging
+            if result.returncode != 0:
+                self.write_to_file(f"RUNNER: Command exited with code {result.returncode}", target_log_file)
         else:
             result = subprocess.run(final_command, shell=True, executable='/bin/bash', capture_output=True, text=True)
             # Log captured output if not redirected
@@ -306,6 +310,8 @@ class PipelineRunner:
             if result.stderr and target_log_file:
                 with open(target_log_file, 'a') as f:
                     f.write(f"STDERR:\n{result.stderr}\n")
+                    if result.returncode != 0:
+                        f.write(f"EXIT CODE: {result.returncode}\n")
         
         # Parse resource usage if monitoring
         peak_memory_gb, cpu_cores, user_time = 0.0, 0.0, 0.0
@@ -795,7 +801,7 @@ class PipelineRunner:
         # Calculate average CPU cores used (total CPU time / wall time)
         cpu_cores = (metrics['user_time'] + metrics['system_time']) / metrics['wall_time'] if metrics['wall_time'] > 0 else 0.0
         
-        return metrics['peak_memory_gb'], cpu_cores, metrics['user_time']
+        return metrics['peak_memory_gb'], cpu_ores, metrics['user_time']
 
     def setup_run_directory(self):
         """Execute setup commands for new run directory if in runid mode."""
@@ -810,16 +816,28 @@ class PipelineRunner:
             
             if not self.dry_run:
                 result = subprocess.run(
-                    full_command, 
-                    shell=True, 
-                    executable='/bin/bash', 
-                    capture_output=True,
-                    text=True,
-                    check=True
+                    full_command, shell=True, executable='/bin/bash', capture_output=True, text=True, check=True
                 )
-                
                 if result.returncode != 0:
                     raise RuntimeError(f"Setup command failed: {full_command}")
+
+    def cleanup_run_directory(self):
+        """Execute cleanup commands at the end of pipeline execution."""
+        if 'cleanup_commands' not in self.config:
+            return
+        
+        self.log("Running cleanup commands...", console=True, tool_log=False)
+        for command in self.config['cleanup_commands']:
+            full_command = self.substitute_variables(command)
+            self.log(f"Cleanup: {full_command}", console=True, tool_log=False)
+            
+            if not self.dry_run:
+                result = subprocess.run(
+                    full_command, shell=True, executable='/bin/bash', capture_output=True, text=True
+                )
+                # Don't fail the pipeline if cleanup fails, just log it
+                if result.returncode != 0:
+                    self.log(f"Warning: Cleanup command failed: {full_command}", console=True, tool_log=False)
 
     def run_pipeline(self, tools: Optional[List[str]] = None):
         """Execute the pipeline."""
@@ -831,40 +849,61 @@ class PipelineRunner:
         # set up logging and print startup info
         self.setup_pipeline_logging()   # Set up pipeline logging first
         self.print_startup_info()       # Print startup information        
-        self.setup_run_directory()      # Run setup commands if in runid mode
+        
+        # Determine what tools to run
+        tools_to_run = tools if tools else list(self.config['tools'].keys())
+        
+        # Handle setup - only run automatically if no --tools specified
+        if not tools and self.runid:
+            self.setup_run_directory()      # Run setup commands if in runid mode
+        
         self.create_versions_log()      # Create versions log file
         self.create_resource_log()      # Create resource log file
         
         # print tools that will be run
-        tools_to_run = tools if tools else list(self.config['tools'].keys())
         self.log(f"\nTools to run: {tools_to_run}", console=True, tool_log=False)
         
-        # then run them!
+        # Run tools (including special ones)
         for tool_name in tools_to_run:
-            if tool_name in self.config['tools']:
-                try:
+            try:
+                if tool_name == 'setup':
+                    if not self.runid:
+                        self.log("Setup can only be run in runid mode (use -r)", console=True, tool_log=False)
+                        continue
+                    self.setup_run_directory()
+                elif tool_name == 'cleanup':
+                    self.cleanup_run_directory()
+                elif tool_name in self.config['tools']:
                     self.run_tool(tool_name, self.config['tools'][tool_name])
-                except Exception as e:
-                    self.log(f"❌ {tool_name} failed: {e}", console=True, tool_log=False)
-                    if not self.skip_missing:
-                        sys.exit(1)
+                else:
+                    self.log(f"⚠️  Unknown tool: {tool_name}", console=True, tool_log=False)
+            except Exception as e:
+                self.log(f"❌ {tool_name} failed: {e}", console=True, tool_log=False)
+                if not self.skip_missing:
+                    sys.exit(1)
         
         # Write resource data
         self.write_resource_data()
         
-        # Log versions for all tools
-        self.log(f"\n{'=' * 3} Logging tool versions {'=' * 37}", console=True, tool_log=False)
-        for tool_name in tools_to_run:
-            if tool_name in self.config['tools']:
+        # Log versions for actual tools that were run (not setup/cleanup)
+        actual_tools = [t for t in tools_to_run if t in self.config['tools']]
+        if actual_tools:
+            self.log(f"\n{'=' * 3} Logging tool versions {'=' * 37}", console=True, tool_log=False)
+            for tool_name in actual_tools:
                 self.log_tool_version(tool_name, self.config['tools'][tool_name])
-        self.log(f"\nDone.\nVersion info written to: {self.versions_file}", console=True, tool_log=False)
+            self.log(f"\nDone.\nVersion info written to: {self.versions_file}", console=True, tool_log=False)
         
         if self.monitor:
             self.log(f"Resource usage written to: {self.resource_file}", console=True, tool_log=False)
         
+        # Handle cleanup - only run automatically if no --tools specified
+        if not tools:
+            self.cleanup_run_directory()
+        
         # Summary
+        tools_summary = f"specified tools ({', '.join(tools_to_run)})" if tools else "all tools"
         self.log("\n" + "=" * 50, console=True, tool_log=False)
-        self.log(f"Pipeline completed for {self.runid}", console=True, tool_log=False)
+        self.log(f"Pipeline completed for {self.runid} - {tools_summary}", console=True, tool_log=False)
         self.log(f"Timestamp: {self.get_timestamp(include_seconds=False)}", console=True, tool_log=False)
         self.log("=" * 50, console=True, tool_log=False)
 

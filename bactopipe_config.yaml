@@ -20,13 +20,26 @@ settings:
   default_sample_file: "{rundir}/samples.tsv"
   default_assembly_path: "/data/runs/ont/analysis/{runid}/assembly/{sample_id}.fa"
   sample_id_column: "SAMPLE_ID"  # Column name containing sample IDs
-  version: 0.1
+  version: 1.1
   # Note that {script_dir} is auto-defined as the directory containing bactopipe.py
 
 # Setup commands for new runs when using runid (-r) mode
 setup_commands:
   - "mkdir -p {rundir}"
   - "cp /data/runs/ont/qc/{runid}/{runid}.sample_taxid.tsv {rundir}/samples.tsv"
+
+# Cleanup commands to run at the end of the pipeline
+cleanup_commands:
+  - "find {rundir} -name 'update_abritamr_db.log' -type f -empty -delete 2>/dev/null || true" # these are meaningless
+  - "find {rundir} -name '*.timer.tmp' -delete 2>/dev/null || true"  # Remove any leftover timer files
+  - |  # Consolidate assembly logs
+    mkdir -p {rundir}/assembly/logs && find {rundir}/assembly -maxdepth 1 -name '*.log' \
+      -exec sh -c 'cat "$1" >> "{rundir}/assembly/logs/$(basename "$1")" && rm "$1"' _ {} \; \
+      2>/dev/null || true
+  - |  # Consolidate medaka log and remove medaka directory
+    cat {rundir}/medaka/medaka.log >> {rundir}/assembly/logs/medaka.log 2>/dev/null || true
+    rm -rf {rundir}/medaka 2>/dev/null || true
+
 
 tools:
 
@@ -65,15 +78,6 @@ tools:
       bash {tool_path} {sample_id} {runid} \
         {rundir}/assembly/{sample_id}.unpolished.fa \
         /data/runs/ont/qc/{runid}/fastq_pass_concatenated/{sample_id}.fastq.gz
-    post_commands:       #consolidate logs & clean up medaka dirs
-      - |
-        mkdir -p {rundir}/assembly/logs && find {rundir}/assembly -maxdepth 1 -name '*.log' \
-          -exec sh -c 'cat "$1" >> "{rundir}/assembly/logs/$(basename "$1")" && rm "$1"' _ {} \; \
-          2>/dev/null || true
-      - |
-        [ -f {rundir}/medaka/medaka.log ] && 
-        cat {rundir}/medaka/medaka.log >> {rundir}/assembly/logs/medaka.log && 
-        rm {rundir}/medaka/medaka.log && rmdir {rundir}/medaka 2>/dev/null || true
 
   prokka:
     description: "Prokka annotation of assembly"
@@ -237,6 +241,14 @@ tools:
             echo -e "$id\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t" >> {rundir}/padloc/padloc_summary.tsv
           fi
         done
+      # Create systems summary
+      - |
+        echo -e "SAMPLE_ID\tSYSTEMS" > {rundir}/padloc/padloc_systems_summary.tsv
+        for id in $(tail -n +2 {rundir}/samples.tsv | cut -f2); do
+          padloc_file="{rundir}/padloc/$id/${id}_padloc.csv"
+          systems=$([ -f "$padloc_file" ] && awk -F, 'NR>1 {print $3}' "$padloc_file" | tr '[:upper:]' '[:lower:]' | sort -u | xargs | tr ' ' ',' || echo "No_PADLOC_results")
+          echo -e "$id\t${systems:-None}" >> {rundir}/padloc/padloc_systems_summary.tsv
+        done
 
   parse_plasmids:
     description: "Parse plasmid results into summary table"
@@ -265,6 +277,10 @@ dependencies:
   abritamr: [medaka]
   mlst: [medaka]
   plasmidfinder: [medaka]
+  checkm: [medaka]
+  padloc: [prokka]
+  parse_plasmids: [plasmidfinder]
+  summarise: [prokka, abritamr, mlst, plasmidfinder, checkm, padloc]
   checkm: [medaka]
   padloc: [prokka]
   parse_plasmids: [plasmidfinder]
