@@ -1,4 +1,4 @@
-#!/bin/bash#
+#!/bin/bash
 
 # Medaka Polishing - BACTOPIPE Medaka Polishing Script
 # ==========================================================================
@@ -16,7 +16,7 @@
 
 set -euo pipefail
 
-VERSION="1.0"
+VERSION="1.1"
 
 # Handle version argument
 [[ "${1:-}" == "--version" ]] && echo "$(basename "$0") ${VERSION}" && exit 0
@@ -30,6 +30,10 @@ SAMPLE_ID=$1
 RUNID=$2
 assembly=$3
 reads=$4
+
+# Expand glob if needed, take first match
+assembly=($assembly); assembly="${assembly[0]}"
+[ ! -f "$assembly" ] && { echo "❌ ERROR: Assembly file not found: $assembly"; exit 1; }
 
 # Set up directories
 medaka_dir="/data/runs/ont/analysis/${RUNID}/assembly/medaka/${SAMPLE_ID}"
@@ -76,8 +80,9 @@ done
 # This is a little python script to restore the header details from the unpolished file
 # (but add medaka_polish and update the length)
 
-# Create polished assembly filename by replacing "unpolished" with "polished"
-unpolished_basename=$(basename "$assembly")
+# Get the actual descriptive filename by following the symlink
+actual_assembly=$(readlink -f "$assembly")
+unpolished_basename=$(basename "$actual_assembly")
 final_polished="${medaka_dir}/${unpolished_basename/unpolished/polished}"
 
 python3 -c "
@@ -98,15 +103,10 @@ for block in seq.split('>')[1:]:
 
 # Check final output was generated and create link
 if [ ! -f "$final_polished" ]; then
-    echo "❌ ERROR: Final polished assembly not created: $final_polished"
+    echo "❌ ERROR: Final polished assembly was NOT created: $final_polished"
     exit 1
-else
-    # Archive the unpolished assembly to medaka dir (copy the actual file, not the link)
-    cp -L "$assembly" "${medaka_dir}/$(basename $assembly)"
-    echo "✅ Final polished assembly created: $(basename $final_polished)"
 fi
 
 # Create final output link
 ln -sf "$final_polished" "$final_output"
-echo "✅ Medaka polishing complete: ${SAMPLE_ID}.fa -> $(basename $final_polished)"
-echo "$final_output"  # Output final path for pipeline to use
+echo "✅ Medaka polishing complete: ${final_output} -> ${final_polished}"

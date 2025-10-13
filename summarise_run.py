@@ -21,7 +21,7 @@ import re
 import os
 import yaml
 
-VERSION = "1.0"
+VERSION = "1.1"
 
 parser = argparse.ArgumentParser(description="Script to combine the key analysis & QC output for a run into one table.")
 parser.add_argument("-r", "--runid", help="Name of the run to process. All other path aspects are automated.")
@@ -40,6 +40,7 @@ print("reading sample sheet")
 samples = pd.read_csv(rundir + "/samples.tsv", sep="\t")
 samples["RUNID"] = runid
 samples = samples[["RUNID", "SAMPLE_ID", "BARCODE", "EXPECTED_SPECIES", "IDENTIFED_SPECIES", "IDENTIFIED_GENOME_SIZE"]]
+samples.rename(columns=lambda x: x.lower() if x in ["EXPECTED_SPECIES", "IDENTIFED_SPECIES", "IDENTIFIED_GENOME_SIZE"] else x, inplace=True)
 
 # Remove any duplicates in the samples file
 if samples.duplicated(subset=['SAMPLE_ID']).any():
@@ -53,16 +54,16 @@ qc = qc[["SAMPLE_ID", "number_of_reads", "number_of_bases", "median_read_length"
 merged = pd.merge(samples, qc, on="SAMPLE_ID", how="left")
 
 # Handle NaN values in IDENTIFIED_GENOME_SIZE
-merged['IDENTIFIED_GENOME_SIZE'] = pd.to_numeric(merged['IDENTIFIED_GENOME_SIZE'], errors='coerce')
-merged['IDENTIFIED_GENOME_SIZE'] = merged['IDENTIFIED_GENOME_SIZE'].fillna(0).astype(int)
+merged['identified_genome_size'] = pd.to_numeric(merged['identified_genome_size'], errors='coerce')
+merged['identified_genome_size'] = merged['identified_genome_size'].fillna(0).astype(int)
 
 # Calculate coverage estimate based on genome size estimate for the actual species
 def calc_coverage(row):
-    if row["IDENTIFIED_GENOME_SIZE"] > 0:
-        return int(row["number_of_bases"] / row["IDENTIFIED_GENOME_SIZE"])
+    if row["identified_genome_size"] > 0:
+        return int(row["number_of_bases"] / row["identified_genome_size"])
     else:
         return 0
-merged["COVERAGE"] = merged.apply(calc_coverage, axis=1)
+merged["coverage"] = merged.apply(calc_coverage, axis=1)
 
 
 def get_autocycler_circularity(rundir, sample_id, contig_id):
@@ -123,9 +124,10 @@ def parse_contig_header(header, rundir=None, sample_id=None):
 
 # Assembly stats
 print("collecting assembly info")
-merged["CONTIGS"] = ""
-merged["NUM_CONTIGS"] = int(0)
-merged["LONGEST_CONTIG"] = int(0)
+merged["contigs"] = ""
+merged["num_contigs"] = int(0)
+merged["longest_contig"] = int(0)
+merged["assembly_method"] = ""
 
 # Extract contig info from final assembly files
 for id in merged["SAMPLE_ID"]:
@@ -136,6 +138,23 @@ for id in merged["SAMPLE_ID"]:
     if not os.path.isfile(assemblyf):
         print(f"WARNING: {assemblyf} not found, setting contig info to NA for sample {id}")
         continue
+
+    # Extract assembly method from the symlink target
+    try:
+        if os.path.islink(assemblyf):
+            # Follow the link and extract method from filename
+            target = os.readlink(assemblyf)
+            # Target will be like: medaka/{id}/{id}.autocycler.reori.polished.fa
+            target_basename = os.path.basename(target)
+            # Remove sample_id prefix and .fa suffix
+            method_part = target_basename.replace(f"{id}.", "").replace(".fa", "")
+            # Remove "polished" to get just the assembly method
+            assembly_method = method_part.replace(".polished", "")
+        else:
+            assembly_method = "unknown"
+    except Exception as e:
+        print(f"WARNING: Could not determine assembly method for {id}: {e}")
+        assembly_method = "unknown"
 
     with open(assemblyf, 'r') as f:
         all_contigs = [line for line in f if ">" in line]
@@ -158,9 +177,10 @@ for id in merged["SAMPLE_ID"]:
     contigs_display = contigs_sorted[:10] + (["[etc]"] if len(contigs_sorted) > 10 else [])
 
     sample_idx = merged.loc[merged['SAMPLE_ID'] == id].index[0]
-    merged.at[sample_idx, "CONTIGS"] = ", ".join(contigs_display)
-    merged.at[sample_idx, "NUM_CONTIGS"] = len(contigs_sorted)
-    merged.at[sample_idx, "LONGEST_CONTIG"] = longest
+    merged.at[sample_idx, "contigs"] = ", ".join(contigs_display)
+    merged.at[sample_idx, "num_contigs"] = len(contigs_sorted)
+    merged.at[sample_idx, "longest_contig"] = longest
+    merged.at[sample_idx, "assembly_method"] = assembly_method
 
 # MLST results
 print("collecting mlst info")

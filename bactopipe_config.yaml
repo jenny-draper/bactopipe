@@ -37,9 +37,14 @@ cleanup_commands:
     mkdir -p {rundir}/assembly/logs && find {rundir}/assembly -maxdepth 1 -name '*.log' \
       -exec sh -c 'cat "$1" >> "{rundir}/assembly/logs/$(basename "$1")" && rm "$1"' _ {} \; \
       2>/dev/null || true
-  - |  # Consolidate medaka log and remove medaka directory
+  - |  # Consolidate medaka log
     cat {rundir}/medaka/medaka.log >> {rundir}/assembly/logs/medaka.log 2>/dev/null || true
-    rm -rf {rundir}/medaka 2>/dev/null || true
+  - |  # Remove empty tool directories and consolidate their logs
+    mkdir -p {rundir}/logs &&
+    for tool in medaka summarise parse_plasmids; do 
+      cat {rundir}/$tool/*.log >> {rundir}/logs/$tool.log 2>/dev/null || true &&
+      rm -rf {rundir}/$tool 2>/dev/null || true
+    done
 
 
 tools:
@@ -72,12 +77,12 @@ tools:
     version_cmd: "bash {tool_path} --version"
     output_dir: "{rundir}/assembly/medaka"
     sample_output_dir: "{rundir}/assembly/medaka/{sample_id}"
-    sample_output_file: "{rundir}/assembly/medaka/{sample_id}/{sample_id}.*.polished.fa"
+    sample_output_file: "{rundir}/assembly/{sample_id}.fa"
     required_files:
-      - "{rundir}/assembly/unpolished_best/{sample_id}.unpolished.fa"
+      - "{rundir}/assembly/unpolished_best/{sample_id}.*.unpolished.fa"
     command: |
       bash {tool_path} {sample_id} {runid} \
-        {rundir}/assembly/unpolished_best/{sample_id}.unpolished.fa \
+        {rundir}/assembly/unpolished_best/{sample_id}.*.unpolished.fa \
         /data/runs/ont/qc/{runid}/fastq_pass_concatenated/{sample_id}.fastq.gz
 
   prokka:
@@ -281,4 +286,5 @@ dependencies:
   checkm: [medaka]
   padloc: [prokka]
   parse_plasmids: [plasmidfinder]
+  summarise: [prokka, abritamr, mlst, plasmidfinder, checkm, padloc]
   summarise: [prokka, abritamr, mlst, plasmidfinder, checkm, padloc]

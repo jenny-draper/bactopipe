@@ -50,45 +50,24 @@ samples = samples[["RUNID", "SAMPLE_ID"]]
 def extract_contig_info(contig, header_line, rundir, sample_id):
     """Extract contig length and circularity from header line"""
     try:
+        header_parts = header_line.split()
+        
+        # Find length (common to both formats)
+        length_parts = [p for p in header_parts if p.startswith("len=")]
+        if not length_parts:
+            return "NA", "NA"
+        contig_length = int(length_parts[0].split("=")[1])
+        
+        # Find circularity - check both autocycler (rotated=) and dragonflye (circular=) formats
         if "autocycler" in header_line:
-            # Autocycler format - extract from header directly
-            header_parts = header_line.split()
-            length_parts = [p for p in header_parts if p.startswith("len=")]
             rotated_parts = [p for p in header_parts if p.startswith("rotated=")]
-            
-            if not length_parts:
-                return "NA", "NA"
-            
-            contig_length = int(length_parts[0].split("=")[1])
-            
-            # Determine circularity from rotated status
-            if rotated_parts:
-                is_rotated = rotated_parts[0].split("=")[1].lower() == "true"
-                circularity = "Y" if is_rotated else "N"
-            else:
-                circularity = "N"
-            
-            return contig_length, circularity
-            
+            circularity = "Y" if rotated_parts and rotated_parts[0].split("=")[1].lower() == "true" else "N"
         else:
-            # Dragonflye format - search for specific patterns
-            header_parts = header_line.split()
-            
-            # Find length
-            length_parts = [p for p in header_parts if p.startswith("len=")]
-            if not length_parts:
-                return "NA", "NA"
-            contig_length = int(length_parts[0].split("=")[1])
-            
-            # Find circularity - look for circular= pattern
             circular_parts = [p for p in header_parts if p.startswith("circular=")]
-            if circular_parts:
-                circularity = circular_parts[0].split("=")[1]
-            else:
-                circularity = "N"  # Default to non-circular if not found
-
-            return contig_length, circularity
-                
+            circularity = circular_parts[0].split("=")[1] if circular_parts else "N"
+        
+        return contig_length, circularity
+            
     except (IndexError, ValueError, Exception):
         return "NA", "NA"
 
@@ -118,12 +97,6 @@ for id in samples["SAMPLE_ID"]:
     amrfinder = pd.read_csv(amrfinderf, sep="\t")
     plasmidfinder = pd.read_csv(plasmidfinderf, sep="\t")
 
-    # DEBUG: Print what's in the files
-    print(f"\n=== DEBUG: AMRfinder contigs ===")
-    print(amrfinder[["Contig id", "Gene symbol", "Start", "Stop"]].to_string())
-    print(f"\n=== DEBUG: PlasmidFinder contigs ===")
-    print(plasmidfinder[["Contig", "Plasmid", "Position in contig"]].to_string())
-
     # Prep plasmidfinder df
     plasmidfinder.rename(columns={"Contig": "Contig_full"}, inplace=True)  # has full contig header details
     plasmidfinder["Contig"] = plasmidfinder["Contig_full"].str.split().str[0]  # extract contig id only
@@ -149,9 +122,6 @@ for id in samples["SAMPLE_ID"]:
         "Gene": lambda x: ",".join(sorted(x.dropna().unique()))
     }).reset_index()
 
-    print(f"Aggregated contigs for {id}: {list(aggregated_df['Contig'])}")
-    print(f"Length of contig list: {len(aggregated_df['Contig'])}")
-
     # Extract contig info from assemblyf for each contig 
     # (can't use PF output as not every AMR contig is a plasmid contig)
     contig_lengths = []
@@ -161,9 +131,6 @@ for id in samples["SAMPLE_ID"]:
         # Use word boundary to ensure exact match at the beginning of the line
         result = subprocess.run(['grep', f'^>{contig} ', assemblyf], capture_output=True, text=True)
         header_line = result.stdout.strip()
-        
-        # Debug output
-        print(f"Contig: {contig} -> header: {header_line[:100] if header_line else 'NOT FOUND'}")
 
         if header_line:
             length, circularity = extract_contig_info(contig, header_line, rundir, id)

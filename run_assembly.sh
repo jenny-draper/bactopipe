@@ -19,7 +19,7 @@
 
 set -euo pipefail
 
-VERSION="1.0"
+VERSION="1.1"
 
 # Handle version argument
 [[ "${1:-}" == "--version" ]] && echo "$(basename "$0") ${VERSION}" && exit 0
@@ -119,7 +119,6 @@ if [ -z "${best_assembly:-}" ]; then
 fi
 
 # Create final symbolic link to the best assembly
-final_link="${ASSEMBLYDIR}/unpolished_best/${SAMPLE_ID}.unpolished.fa"
 mkdir -p "${ASSEMBLYDIR}/unpolished_best"
 
 if [ -n "${best_assembly:-}" ] && [ -f "$best_assembly" ]; then
@@ -133,16 +132,12 @@ if [ -n "${best_assembly:-}" ] && [ -f "$best_assembly" ]; then
     assembly_method="${assembly_method//reoriented/reori}"
     assembly_method="${assembly_method//dragoneflye/dragonflye}"
     
-    # Create descriptive link name
-    descriptive_link="${ASSEMBLYDIR}/unpolished_best/${SAMPLE_ID}.${assembly_method}.unpolished.fa"
+    # Create descriptive link name only
+    final_link="${ASSEMBLYDIR}/unpolished_best/${SAMPLE_ID}.${assembly_method}.unpolished.fa"
     
-    ln -sf "$best_assembly" "$descriptive_link"
-    ln -sf "$descriptive_link" "$final_link"  # Also create the generic link
-    
-    echo "✅ Created assembly links:"
-    echo "   Generic: ${SAMPLE_ID}.unpolished.fa -> $(basename "$best_assembly")"
-    echo "   Descriptive: ${SAMPLE_ID}.${assembly_method}.unpolished.fa -> $(basename "$best_assembly")"
-    echo "Final assembly: $final_link"
+    ln -sf "$best_assembly" "$final_link"
+
+    echo "✅ Created best assembly link: ${final_link} -> ${best_assembly}"
 else
     echo "❌ No suitable assembly found for $SAMPLE_ID"
     exit 1
