@@ -118,6 +118,12 @@ for id in samples["SAMPLE_ID"]:
     amrfinder = pd.read_csv(amrfinderf, sep="\t")
     plasmidfinder = pd.read_csv(plasmidfinderf, sep="\t")
 
+    # DEBUG: Print what's in the files
+    print(f"\n=== DEBUG: AMRfinder contigs ===")
+    print(amrfinder[["Contig id", "Gene symbol", "Start", "Stop"]].to_string())
+    print(f"\n=== DEBUG: PlasmidFinder contigs ===")
+    print(plasmidfinder[["Contig", "Plasmid", "Position in contig"]].to_string())
+
     # Prep plasmidfinder df
     plasmidfinder.rename(columns={"Contig": "Contig_full"}, inplace=True)  # has full contig header details
     plasmidfinder["Contig"] = plasmidfinder["Contig_full"].str.split().str[0]  # extract contig id only
@@ -143,14 +149,21 @@ for id in samples["SAMPLE_ID"]:
         "Gene": lambda x: ",".join(sorted(x.dropna().unique()))
     }).reset_index()
 
+    print(f"Aggregated contigs for {id}: {list(aggregated_df['Contig'])}")
+    print(f"Length of contig list: {len(aggregated_df['Contig'])}")
+
     # Extract contig info from assemblyf for each contig 
     # (can't use PF output as not every AMR contig is a plasmid contig)
     contig_lengths = []
     contig_circular = []
     for contig in aggregated_df["Contig"]:
         # Run grep to extract the fasta header line with the contig id
-        result = subprocess.run(['grep', f'>{contig}', assemblyf], capture_output=True, text=True)
+        # Use word boundary to ensure exact match at the beginning of the line
+        result = subprocess.run(['grep', f'^>{contig} ', assemblyf], capture_output=True, text=True)
         header_line = result.stdout.strip()
+        
+        # Debug output
+        print(f"Contig: {contig} -> header: {header_line[:100] if header_line else 'NOT FOUND'}")
 
         if header_line:
             length, circularity = extract_contig_info(contig, header_line, rundir, id)

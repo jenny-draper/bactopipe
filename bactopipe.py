@@ -133,8 +133,9 @@ class PipelineRunner:
 
     def print_startup_info(self):
         """Print startup banner with key information."""
+        pipeline_name = self.config.get('settings', {}).get('pipeline_name', 'Pipeline')
         self.log("=" * 60, console=True, tool_log=False)
-        self.log(f"BactoPipe: Bacterial ONT Sequence Analysis Pipeline v{VERSION}", console=True, tool_log=False)
+        self.log(f"BactoPipe v{VERSION}: {pipeline_name}", console=True, tool_log=False)
         self.log("=" * 60, console=True, tool_log=False)
         self.log(f"Command: {' '.join(sys.argv)}", console=True, tool_log=False)
         self.log(f"Run ID: {self.runid}", console=True, tool_log=False)
@@ -421,7 +422,9 @@ class PipelineRunner:
                 if filtered_missing:
                     missing_count = len(filtered_missing)
                     sample_list = ', '.join(filtered_missing[:3]) + ('...' if missing_count > 3 else '')
-                    missing_details.append(f"{dep_tool} outputs missing for {missing_count} samples: {sample_list}")
+                    # Show the expected path pattern for the first missing sample
+                    example_path = self.substitute_variables(sample_output_file, filtered_missing[0])
+                    missing_details.append(f"{dep_tool} outputs missing for {missing_count} samples: {sample_list} (expected path: {example_path})")
                 
                 # Log if we're allowing some failures
                 allowed_failures = [s for s in missing_samples if s in allow_failed_sample_ids]
@@ -555,7 +558,7 @@ class PipelineRunner:
         
         with open(versions_file, 'w') as f:
             f.write("tool\tversion\tpath\tdatabase\n")
-            f.write(f"run_pipeline.py\t{VERSION}\t{pipeline_path}\t{DEFAULTS['default_database_value']}\n")
+            f.write(f"bactopipe.py\t{VERSION}\t{pipeline_path}\t{DEFAULTS['default_database_value']}\n")
             f.write(f"bactopipe_config.yaml\t{config_version}\t{self.config_file}\t{DEFAULTS['default_database_value']}\n")
         
         # Store the filename for later reference
@@ -801,7 +804,7 @@ class PipelineRunner:
         # Calculate average CPU cores used (total CPU time / wall time)
         cpu_cores = (metrics['user_time'] + metrics['system_time']) / metrics['wall_time'] if metrics['wall_time'] > 0 else 0.0
         
-        return metrics['peak_memory_gb'], cpu_ores, metrics['user_time']
+        return metrics['peak_memory_gb'], cpu_cores, metrics['user_time']
 
     def setup_run_directory(self):
         """Execute setup commands for new run directory if in runid mode."""
@@ -1047,7 +1050,7 @@ def main():
             config = yaml.safe_load(f)
         
         print("tool\tversion\tpath\tdatabase")
-        print(f"run_pipeline.py\t{VERSION}\t{Path(__file__).absolute()}\tnone")
+        print(f"bactopipe.py\t{VERSION}\t{Path(__file__).absolute()}\tnone")
         config_version = config.get('settings', {}).get('version', 'unknown')
         print(f"bactopipe_config.yaml\t{config_version}\t{config_path}\tnone")
         

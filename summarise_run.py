@@ -68,7 +68,7 @@ merged["COVERAGE"] = merged.apply(calc_coverage, axis=1)
 def get_autocycler_circularity(rundir, sample_id, contig_id):
     """Get circularity info from autocycler YAML file"""
     try:
-        yaml_file = f"{rundir}/assemblies/autocycler/{sample_id}/assembly_graph_summary.yaml"
+        yaml_file = f"{rundir}/assembly/autocycler/{sample_id}/assembly_graph_summary.yaml"
         if os.path.exists(yaml_file):
             with open(yaml_file, 'r') as f:
                 data = yaml.safe_load(f)

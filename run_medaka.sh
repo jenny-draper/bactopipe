@@ -1,18 +1,18 @@
-#!/bin/bash
-"""
-Medaka Polishing - BACTOPIPE Medaka Polishing Script
-==========================================================================
+#!/bin/bash#
 
-Runs Medaka consensus polishing on bacterial assemblies.
-Automatically detects the appropriate Medaka model from QC run output where available.
-
-Author: Jenny Draper
-Date: October 2025
-
-Usage:
-    run_medaka.sh <SAMPLE_ID> <RUNID> <ASSEMBLY> <READS>
-    run_medaka.sh --version
-"""
+# Medaka Polishing - BACTOPIPE Medaka Polishing Script
+# ==========================================================================
+#
+# Runs Medaka consensus polishing on bacterial assemblies.
+# Automatically detects the appropriate Medaka model from QC run output where available.
+#
+# Author: Jenny Draper
+# Date: October 2025
+#
+# Usage:
+#    run_medaka.sh <SAMPLE_ID> <RUNID> <ASSEMBLY> <READS>
+#    run_medaka.sh --version
+#
 
 set -euo pipefail
 
@@ -37,7 +37,8 @@ assembly_dir="/data/runs/ont/analysis/${RUNID}/assembly"
 final_output="${assembly_dir}/${SAMPLE_ID}.fa"
 mkdir -p "$medaka_dir"
 
-# Determine Medaka model for this run
+
+# Determine Medaka model for this run. Attempt to get from run QC data, else use default
 MEDAKA_MODEL=$(awk -F'\t' '$1=="Basecaller Model String" {print $2}' "/data/runs/ont/qc/${RUNID}/${RUNID}.ont_versions.tsv" 2>/dev/null)
 if [ -z "$MEDAKA_MODEL" ] || ! medaka tools list_models 2>/dev/null | grep -q "^${MEDAKA_MODEL}$"; then
     [ -n "$MEDAKA_MODEL" ] && echo "WARNING: model $MEDAKA_MODEL isn't valid, using default: $DEFAULT_MEDAKA_MODEL" >&2
@@ -70,38 +71,42 @@ for round in $(seq 1 $MEDAKA_ROUNDS); do
     fi
 done
 
-# Create final polished file with preserved headers
-final_polished="${medaka_dir}/${SAMPLE_ID}.polished.fa"
 
-# Extract original headers and preserve them with medaka annotation
-awk -v medaka_rounds="$MEDAKA_ROUNDS" '
-BEGIN { 
-    # Read original headers from assembly file
-    while ((getline line < "'$assembly'") > 0) {
-        if (line ~ /^>/) {
-            orig_headers[++header_count] = substr(line, 2) " medaka_polish=" medaka_rounds
-        }
-    }
-    close("'$assembly'")
-    contig_num = 0
-}
-/^>/ { 
-    contig_num++
-    if (contig_num in orig_headers) {
-        print ">" orig_headers[contig_num]
-    } else {
-        print $0 " medaka_polish=" medaka_rounds
-    }
-    next
-}
-{ print }
-' "$current_fa" > "$final_polished"
+# Medaka output strips everything but the contig name from contig headers.
+# This is a little python script to restore the header details from the unpolished file
+# (but add medaka_polish and update the length)
 
-# Check final output and create link
+# Create polished assembly filename by replacing "unpolished" with "polished"
+unpolished_basename=$(basename "$assembly")
+final_polished="${medaka_dir}/${unpolished_basename/unpolished/polished}"
+
+python3 -c "
+import re
+# Load original headers by contig name
+orig = {line.split()[0][1:]: line.strip() for line in open('$assembly') if line.startswith('>')}
+
+# Process medaka output
+seq = open('$current_fa').read()
+for block in seq.split('>')[1:]:
+    contig, *seqlines = block.splitlines()
+    header = orig.get(contig, f'>{contig}')
+    new_len = sum(len(line) for line in seqlines)
+    header = re.sub(r'len=\d+', f'len={new_len}', header)
+    print(f'{header} medaka_polish=$MEDAKA_ROUNDS')
+    print('\n'.join(seqlines))
+" > "$final_polished"
+
+# Check final output was generated and create link
 if [ ! -f "$final_polished" ]; then
     echo "❌ ERROR: Final polished assembly not created: $final_polished"
     exit 1
+else
+    # Archive the unpolished assembly to medaka dir (copy the actual file, not the link)
+    cp -L "$assembly" "${medaka_dir}/$(basename $assembly)"
+    echo "✅ Final polished assembly created: $(basename $final_polished)"
 fi
+
+# Create final output link
 ln -sf "$final_polished" "$final_output"
-echo "✅ Medaka polishing complete: ${SAMPLE_ID}.fa"
+echo "✅ Medaka polishing complete: ${SAMPLE_ID}.fa -> $(basename $final_polished)"
 echo "$final_output"  # Output final path for pipeline to use

@@ -1,21 +1,21 @@
 #!/bin/bash
-"""
-Assembly - BACTOPIPE Bacterial Genome Assembly Script
-=============================================================================
 
-Performs bacterial genome assembly using Autocycler, with a fallback to 
-Dragonflye if Autocycler fails. 
-
-Note it this does NOT perform medaka polishing; that has been moved to a 
-separate step, to enable higher parallelism in the assembly pipeline.
-
-Author: Jenny Draper
-Date: October 2025
-
-Usage:
-    run_assembly.sh <SAMPLE_ID> <RUNID>
-    run_assembly.sh --version
-"""
+# Assembly - BACTOPIPE Bacterial Genome Assembly Script
+# ============================================================================
+#
+# Performs bacterial genome assembly using Autocycler, with a fallback to
+# Dragonflye if Autocycler fails.
+#
+# Note it this does NOT perform medaka polishing; that has been moved to a
+# separate step, to enable higher parallelism in the assembly pipeline.
+#
+# Author: Jenny Draper
+#       Date: October 2025
+#   
+# Usage:
+#    run_assembly.sh <SAMPLE_ID> <RUNID>
+#    run_assembly.sh --version
+#
 
 set -euo pipefail
 
@@ -48,91 +48,100 @@ QCDIR="/data/runs/ont/qc/${RUNID}"
 ASSEMBLYDIR="/data/runs/ont/analysis/${RUNID}/assembly"
 reads="${QCDIR}/fastq_pass_concatenated/${SAMPLE_ID}.fastq.gz"
 
-# Get genome size from samples file
-size=$(awk -F'\t' -v id="$SAMPLE_ID" '$2==id {print $6}' "/data/runs/ont/analysis/${RUNID}/samples.tsv")
+# Check required files
+if [ ! -f "$reads" ]; then echo "❌ ERROR: Reads not found: $reads"; exit 1; fi
 
 echo "Starting assembly for SAMPLE: $SAMPLE_ID (RUN: $RUNID)"
 
-# Check required files
-if [ ! -f "$reads" ]; then
-    echo "❌ ERROR: Reads not found: $reads"
-    exit 1
-fi
+# Get genome size from samples file
+gsize=$(awk -F'\t' -v id="$SAMPLE_ID" '$2==id {print $6}' "/data/runs/ont/analysis/${RUNID}/samples.tsv")
 
-# Function to check for assembly output files
-find_best_assembly() {
+# Function to find best assembly and report success
+find_assembly() {
     local dir="$1"
     local prefix="$2"
-    for suffix in ".reoriented.fa" ".fa"; do
-        local fa="${dir}/${prefix}${suffix}"
-        if [ -f "$fa" ]; then
-            echo "$fa"
-            return 0
-        fi
-    done
-    return 1
+    local assembler="$3"
+    
+    best_assembly="${dir}/${prefix}.reoriented.fa"
+    [ ! -f "$best_assembly" ] && best_assembly="${dir}/${prefix}.fa"
+    [ -f "$best_assembly" ] && echo "✅ ${assembler} succeeded: $(basename "$best_assembly")"
 }
 
 # Build assembly options
 base_opts="--trim --keepfiles --nanohq --seed 42 --racon 2 --medaka 0"
-size_opt=""
-if [ -n "$size" ] && [ "$size" != "NA" ]; then
-    size_opt="--gsize $size"
-fi
 
-# Try Autocycler first
+# Try Autocycler first ----------------------------------------------------------------
 autocycler_dir="${ASSEMBLYDIR}/autocycler/${SAMPLE_ID}"
 mkdir -p "$autocycler_dir"
-autocycler_prefix="${SAMPLE_ID}-dragonflye_auto"
+autocycler_prefix="${SAMPLE_ID}-autocycler"
 
 echo "▶️ Attempting Autocycler assembly"
-if dragonflye_auto \
-    --assembler autocycler \
-    --reads "$reads" \
-    --outdir "$autocycler_dir" \
-    --prefix "$autocycler_prefix" \
-    --depth "$AUTOCYCLER_DEPTH" \
-    --force \
-    $base_opts $size_opt; then
-    
-    if best_assembly=$(find_best_assembly "$autocycler_dir" "$autocycler_prefix"); then
-        echo "✅ Autocycler succeeded: $(basename "$best_assembly")"
-    fi
+autocycler_cmd="dragonflye_auto \
+                     --assembler autocycler \
+                     --reads $reads \
+                     --outdir $autocycler_dir \
+                     --prefix $autocycler_prefix \
+                     --depth $AUTOCYCLER_DEPTH \
+                     --force \
+                     $base_opts"
+if [ -n "$gsize" ] && [ "$gsize" != "NA" ]; then autocycler_cmd="$autocycler_cmd --gsize $gsize"; fi
+
+echo "Running: $autocycler_cmd"
+if eval "$autocycler_cmd"; then
+    find_assembly "$autocycler_dir" "$autocycler_prefix" "Autocycler"
 fi
 
-# Fallback to Dragonflye if autocycler failed
+# Fallback to Dragonflye if autocycler failed ---------------------------------------
 if [ -z "${best_assembly:-}" ]; then
     echo "⚠️ Autocycler failed, trying Dragonflye"
     dragonflye_dir="${ASSEMBLYDIR}/dragonflye/${SAMPLE_ID}"
     mkdir -p "$dragonflye_dir"
     dragonflye_prefix="${SAMPLE_ID}-dragonflye"
 
-    # Use --meta flag if no genome size
-    dragonflye_size_opt="$size_opt"
-    if [ -z "$size_opt" ]; then
-        dragonflye_size_opt='--opts "--meta"'
+    # set up dragonflye cmd & -gsize/-meta mode 
+    dragonflye_cmd="dragonflye \
+                        --reads $reads \
+                        --outdir $dragonflye_dir \
+                        --prefix $dragonflye_prefix\
+                         --depth $DRAGONFLYE_DEPTH \
+                        --force \
+                         $base_opts"
+    if [ -n "$gsize" ] && [ "$gsize" != "NA" ]; then
+        dragonflye_cmd="$dragonflye_cmd --gsize $gsize"
+    else
+        dragonflye_cmd="$dragonflye_cmd --opts \"--meta\""
     fi
 
-    if dragonflye \
-        --reads "$reads" \
-        --outdir "$dragonflye_dir" \
-        --prefix "$dragonflye_prefix" \
-        --depth "$DRAGONFLYE_DEPTH" \
-        --force \
-        $base_opts $dragonflye_size_opt; then
-        
-        if best_assembly=$(find_best_assembly "$dragonflye_dir" "$dragonflye_prefix"); then
-            echo "✅ Dragonflye succeeded: $(basename "$best_assembly")"
-        fi
+    echo "Running: $dragonflye_cmd"
+    if eval "$dragonflye_cmd"; then
+        find_assembly "$dragonflye_dir" "$dragonflye_prefix" "Dragonflye"
     fi
 fi
 
 # Create final symbolic link to the best assembly
-final_link="${ASSEMBLYDIR}/${SAMPLE_ID}.unpolished.fa"
+final_link="${ASSEMBLYDIR}/unpolished_best/${SAMPLE_ID}.unpolished.fa"
+mkdir -p "${ASSEMBLYDIR}/unpolished_best"
 
 if [ -n "${best_assembly:-}" ] && [ -f "$best_assembly" ]; then
-    ln -sf "$best_assembly" "$final_link"
-    echo "✅ Created final assembly link: ${SAMPLE_ID}.unpolished.fa -> $(basename "$best_assembly")"
+    # Determine assembly method from the actual assembly filename
+    assembly_method=$(basename "$best_assembly" .fa)
+    assembly_method="${assembly_method#${SAMPLE_ID}.}"
+    assembly_method="${assembly_method#${SAMPLE_ID}-}"
+    
+    # Replace assembly method strings as requested
+    assembly_method="${assembly_method//dragonflye_auto/autocycler}"
+    assembly_method="${assembly_method//reoriented/reori}"
+    assembly_method="${assembly_method//dragoneflye/dragonflye}"
+    
+    # Create descriptive link name
+    descriptive_link="${ASSEMBLYDIR}/unpolished_best/${SAMPLE_ID}.${assembly_method}.unpolished.fa"
+    
+    ln -sf "$best_assembly" "$descriptive_link"
+    ln -sf "$descriptive_link" "$final_link"  # Also create the generic link
+    
+    echo "✅ Created assembly links:"
+    echo "   Generic: ${SAMPLE_ID}.unpolished.fa -> $(basename "$best_assembly")"
+    echo "   Descriptive: ${SAMPLE_ID}.${assembly_method}.unpolished.fa -> $(basename "$best_assembly")"
     echo "Final assembly: $final_link"
 else
     echo "❌ No suitable assembly found for $SAMPLE_ID"

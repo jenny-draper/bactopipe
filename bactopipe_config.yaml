@@ -13,12 +13,13 @@
 
 # Global settings
 settings:
+  pipeline_name: "Bacterial ONT Sequence Analysis Pipeline"  
   default_parallel: 10
   default_execution_mode: batch
   allow_failed_sample_ids: ["NEG"]
   default_outdir: "/data/runs/ont/analysis/{runid}"
   default_sample_file: "{rundir}/samples.tsv"
-  default_assembly_path: "/data/runs/ont/analysis/{runid}/assembly/{sample_id}.fa"
+  default_assembly_path: "{rundir}/assembly/{sample_id}.fa"
   sample_id_column: "SAMPLE_ID"  # Column name containing sample IDs
   version: 1.1
   # Note that {script_dir} is auto-defined as the directory containing bactopipe.py
@@ -53,7 +54,7 @@ tools:
     tool_path: "{script_dir}/run_assembly.sh"
     version_cmd: "bash {tool_path} --version"
     command: "bash {tool_path} {sample_id} {runid}"
-    sample_output_file: "{rundir}/assembly/{sample_id}.unpolished.fa"
+    sample_output_file: "{rundir}/assembly/unpolished_best/{sample_id}.*.unpolished.fa"
     output_dir: "{rundir}/assembly"
     sub_tools:
       - name: "dragonflye_auto"
@@ -71,17 +72,17 @@ tools:
     version_cmd: "bash {tool_path} --version"
     output_dir: "{rundir}/assembly/medaka"
     sample_output_dir: "{rundir}/assembly/medaka/{sample_id}"
-    sample_output_file: "{rundir}/assembly/{sample_id}.fa"
+    sample_output_file: "{rundir}/assembly/medaka/{sample_id}/{sample_id}.*.polished.fa"
     required_files:
-      - "{rundir}/assembly/{sample_id}.unpolished.fa"
+      - "{rundir}/assembly/unpolished_best/{sample_id}.unpolished.fa"
     command: |
       bash {tool_path} {sample_id} {runid} \
-        {rundir}/assembly/{sample_id}.unpolished.fa \
+        {rundir}/assembly/unpolished_best/{sample_id}.unpolished.fa \
         /data/runs/ont/qc/{runid}/fastq_pass_concatenated/{sample_id}.fastq.gz
 
   prokka:
     description: "Prokka annotation of assembly"
-    db_cmd: "prokka --listdb 2>&1 | head -1 | grep -o '/[^[:space:]]*'"
+    db_cmd: "prokka --listdb 2>&1 | head -1 | grep -o '/[l^[:space:]]*'"
     modules:
       - prokka
     execution_mode: per_sample
@@ -277,10 +278,6 @@ dependencies:
   abritamr: [medaka]
   mlst: [medaka]
   plasmidfinder: [medaka]
-  checkm: [medaka]
-  padloc: [prokka]
-  parse_plasmids: [plasmidfinder]
-  summarise: [prokka, abritamr, mlst, plasmidfinder, checkm, padloc]
   checkm: [medaka]
   padloc: [prokka]
   parse_plasmids: [plasmidfinder]
