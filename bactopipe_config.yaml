@@ -59,7 +59,7 @@ tools:
     tool_path: "{script_dir}/run_assembly.sh"
     version_cmd: "bash {tool_path} --version"
     command: "bash {tool_path} {sample_id} {runid}"
-    sample_output_file: "{rundir}/assembly/unpolished_best/{sample_id}.*.unpolished.fa"
+    sample_output_file: "{rundir}/assembly/unpolished_best/{sample_id}.*-unpolished.fa"
     output_dir: "{rundir}/assembly"
     sub_tools:
       - name: "dragonflye_auto"
@@ -79,10 +79,10 @@ tools:
     sample_output_dir: "{rundir}/assembly/medaka/{sample_id}"
     sample_output_file: "{rundir}/assembly/{sample_id}.fa"
     required_files:
-      - "{rundir}/assembly/unpolished_best/{sample_id}.*.unpolished.fa"
+      - "{rundir}/assembly/unpolished_best/{sample_id}*-unpolished.fa"
     command: |
       bash {tool_path} {sample_id} {runid} \
-        {rundir}/assembly/unpolished_best/{sample_id}.*.unpolished.fa \
+        {rundir}/assembly/unpolished_best/{sample_id}.*-unpolished.fa \
         /data/runs/ont/qc/{runid}/fastq_pass_concatenated/{sample_id}.fastq.gz
 
   prokka:

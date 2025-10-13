@@ -144,12 +144,12 @@ for id in merged["SAMPLE_ID"]:
         if os.path.islink(assemblyf):
             # Follow the link and extract method from filename
             target = os.readlink(assemblyf)
-            # Target will be like: medaka/{id}/{id}.autocycler.reori.polished.fa
+            # Target will be like: medaka/{id}/{id}.autocycler-reori-polished.fa
             target_basename = os.path.basename(target)
             # Remove sample_id prefix and .fa suffix
             method_part = target_basename.replace(f"{id}.", "").replace(".fa", "")
-            # Remove "polished" to get just the assembly method
-            assembly_method = method_part.replace(".polished", "")
+            # Remove "-polished" to get just the assembly method
+            assembly_method = method_part.replace("-polished", "")
         else:
             assembly_method = "unknown"
     except Exception as e:

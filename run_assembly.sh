@@ -73,7 +73,7 @@ base_opts="--trim --keepfiles --nanohq --seed 42 --racon 2 --medaka 0"
 # Try Autocycler first ----------------------------------------------------------------
 autocycler_dir="${ASSEMBLYDIR}/autocycler/${SAMPLE_ID}"
 mkdir -p "$autocycler_dir"
-autocycler_prefix="${SAMPLE_ID}-autocycler"
+autocycler_prefix="${SAMPLE_ID}.autocycler"
 
 echo "▶️ Attempting Autocycler assembly"
 autocycler_cmd="dragonflye_auto \
@@ -96,7 +96,7 @@ if [ -z "${best_assembly:-}" ]; then
     echo "⚠️ Autocycler failed, trying Dragonflye"
     dragonflye_dir="${ASSEMBLYDIR}/dragonflye/${SAMPLE_ID}"
     mkdir -p "$dragonflye_dir"
-    dragonflye_prefix="${SAMPLE_ID}-dragonflye"
+    dragonflye_prefix="${SAMPLE_ID}.dragonflye"
 
     # set up dragonflye cmd & -gsize/-meta mode 
     dragonflye_cmd="dragonflye \
@@ -125,15 +125,15 @@ if [ -n "${best_assembly:-}" ] && [ -f "$best_assembly" ]; then
     # Determine assembly method from the actual assembly filename
     assembly_method=$(basename "$best_assembly" .fa)
     assembly_method="${assembly_method#${SAMPLE_ID}.}"
-    assembly_method="${assembly_method#${SAMPLE_ID}-}"
     
-    # Replace assembly method strings as requested
+    # Replace assembly method strings and join with hyphens
     assembly_method="${assembly_method//dragonflye_auto/autocycler}"
     assembly_method="${assembly_method//reoriented/reori}"
     assembly_method="${assembly_method//dragoneflye/dragonflye}"
+    assembly_method="${assembly_method//./-}"  # Replace dots with hyphens
     
     # Create descriptive link name only
-    final_link="${ASSEMBLYDIR}/unpolished_best/${SAMPLE_ID}.${assembly_method}.unpolished.fa"
+    final_link="${ASSEMBLYDIR}/unpolished_best/${SAMPLE_ID}.${assembly_method}-unpolished.fa"
     
     ln -sf "$best_assembly" "$final_link"
 

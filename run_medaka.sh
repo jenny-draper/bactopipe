@@ -83,7 +83,7 @@ done
 # Get the actual descriptive filename by following the symlink
 actual_assembly=$(readlink -f "$assembly")
 unpolished_basename=$(basename "$actual_assembly")
-final_polished="${medaka_dir}/${unpolished_basename/unpolished/polished}"
+final_polished="${medaka_dir}/${unpolished_basename/-unpolished/-polished}"
 
 python3 -c "
 import re
