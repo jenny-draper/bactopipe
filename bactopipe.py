@@ -19,14 +19,16 @@ Usage:
 
 import argparse
 import datetime
+import glob
 import os
-import shlex  # Add this import
+import shlex
 import subprocess
 import sys
 import time
 import yaml
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import contextmanager
 from typing import Dict, List, Any, Optional, Tuple
 
 VERSION = "1.1"
@@ -123,31 +125,31 @@ class PipelineRunner:
             if self.pipeline_log_file:
                 self.write_to_file(message, self.pipeline_log_file)
         
-        # Tool log (with RUNNER: prefix)
+        # Tool log (with Bactopipe: prefix)
         if tool_log and self.current_log_file:
-            self.write_to_file(message, self.current_log_file, prefix="RUNNER: ")
+            self.write_to_file(message, self.current_log_file, prefix="Bactopipe: ")
         
-        # Sample log (with RUNNER: prefix)
+        # Sample log (with Bactopipe: prefix)
         if sample_log:
-            self.write_to_file(message, sample_log, prefix="RUNNER: ")
+            self.write_to_file(message, sample_log, prefix="Bactopipe: ")
 
     def print_startup_info(self):
         """Print startup banner with key information."""
         pipeline_name = self.config.get('settings', {}).get('pipeline_name', 'Pipeline')
-        self.log("=" * 60, console=True, tool_log=False)
-        self.log(f"BactoPipe v{VERSION}: {pipeline_name}", console=True, tool_log=False)
-        self.log("=" * 60, console=True, tool_log=False)
-        self.log(f"Command: {' '.join(sys.argv)}", console=True, tool_log=False)
-        self.log(f"Run ID: {self.runid}", console=True, tool_log=False)
-        self.log(f"Config file: {self.config_file}", console=True, tool_log=False)
-        self.log(f"Output directory: {self.rundir}", console=True, tool_log=False)
-        self.log(f"Target samples file: {self.input_file}", console=True, tool_log=False)
+        self.log("=" * 60)
+        self.log(f"BactoPipe v{VERSION}: {pipeline_name}")
+        self.log("=" * 60)
+        self.log(f"Command: {' '.join(sys.argv)}")
+        self.log(f"Run ID: {self.runid}")
+        self.log(f"Config file: {self.config_file}")
+        self.log(f"Output directory: {self.rundir}")
+        self.log(f"Target samples file: {self.input_file}")
         
         # System resources (only show if monitoring is enabled)
         if self.monitor:
             cpu_info = self._format_cpu_info()
             mem_info = f"{self.system_resources['memory_gb']} GB RAM" if self.system_resources['memory_gb'] != 'unknown' else "RAM: unknown"
-            self.log(f"Available System Resources: {cpu_info}, {mem_info}", console=True, tool_log=False)
+            self.log(f"Available System Resources: {cpu_info}, {mem_info}")
         
         # Settings
         settings = []
@@ -156,10 +158,10 @@ class PipelineRunner:
         if self.skip_missing: settings.append("SKIP MISSING")
         if not self.monitor: settings.append("NO MONITORING")
         
-        self.log(f"Flags: {', '.join(settings) if settings else 'None'}", console=True, tool_log=False)
-        self.log(f"User: {os.getenv('USER', 'unknown')}", console=True, tool_log=False)
-        self.log(f"Timestamp: {self.get_timestamp()}", console=True, tool_log=False)
-        self.log("=" * 60, console=True, tool_log=False)
+        self.log(f"Flags: {', '.join(settings) if settings else 'None'}")
+        self.log(f"User: {os.getenv('USER', 'unknown')}")
+        self.log(f"Timestamp: {self.get_timestamp()}")
+        self.log("=" * 60)
 
     def _format_cpu_info(self) -> str:
         """Format CPU information string."""
@@ -219,22 +221,27 @@ class PipelineRunner:
         # Add assembly_file if needed
         if sample_id and 'default_assembly_path' in self.config.get('settings', {}):
             assembly_path = self.config['settings']['default_assembly_path']
-            # Direct substitution without recursion
             assembly_path = assembly_path.replace('{runid}', self.runid)
             assembly_path = assembly_path.replace('{rundir}', str(self.rundir))
             assembly_path = assembly_path.replace('{sample_id}', sample_id)
             substitutions['assembly_file'] = assembly_path
         
-        # Add tool_config values if provided (allows within-block references)
+        # Add tool_config values if provided
         if tool_config:
             for key, value in tool_config.items():
                 if isinstance(value, str) and '{' not in key:
                     substitutions[key] = self.substitute_variables(value, sample_id)
         
-        # Now do all substitutions
+        # Do all substitutions
         result = text
         for key, value in substitutions.items():
             result = result.replace(f"{{{key}}}", str(value))
+        
+        # Expand any glob patterns (wildcards) in the result
+        if '*' in result or '?' in result:
+            matches = glob.glob(result)
+            if matches:
+                result = matches[0]  # Take first match
         
         return result
 
@@ -260,7 +267,7 @@ class PipelineRunner:
             self.log(f"{prefix}Logging to: {target_log_file}", tool_log=False)
         
         # Log to tool-specific file with context
-        log_msg = f"RUNNER: Running {context}: {full_command}" if context else f"RUNNER: Running: {full_command}"
+        log_msg = f"Bactopipe: Running {context}: {full_command}" if context else f"Bactopipe: Running: {full_command}"
         self.write_to_file(log_msg, target_log_file)
         
         if self.dry_run:
@@ -301,7 +308,7 @@ class PipelineRunner:
             
             # Log the exit code for debugging
             if result.returncode != 0:
-                self.write_to_file(f"RUNNER: Command exited with code {result.returncode}", target_log_file)
+                self.write_to_file(f"Bactopipe: Command exited with code {result.returncode}", target_log_file)
         else:
             result = subprocess.run(final_command, shell=True, executable='/bin/bash', capture_output=True, text=True)
             # Log captured output if not redirected
@@ -341,6 +348,16 @@ class PipelineRunner:
         self.init_log_file(log_file, f"{tool_name} log")
         self.current_log_file = log_file
         return log_file
+
+    @contextmanager
+    def tool_logging_context(self, tool_name: str):
+        """Context manager for tool-specific logging that ensures cleanup."""
+        log_file = self.setup_tool_logging(tool_name, self.rundir)
+        try:
+            yield log_file
+        finally:
+            # Always clear the current log file when exiting tool context
+            self.current_log_file = None
 
     def process_sample(self, tool_name: str, tool_config: Dict[str, Any], sample_id: str) -> Tuple[str, float, float, float]:
         """Execute tool on a single sample and return result with resource usage."""
@@ -430,7 +447,7 @@ class PipelineRunner:
                 allowed_failures = [s for s in missing_samples if s in allow_failed_sample_ids]
                 if allowed_failures:
                     allowed_list = ', '.join(allowed_failures[:3]) + ('...' if len(allowed_failures) > 3 else '')
-                    self.log(f"ℹ️  {tool_name}: allowing specified samples with missing {dep_tool} dependencies: {allowed_list}", tool_log=False)
+                    self.log(f"ℹ️  {tool_name}: allowing specified samples with missing {dep_tool} dependencies: {allowed_list}")
             
             if output_file:
                 # Check batch output exists
@@ -442,58 +459,59 @@ class PipelineRunner:
 
     def run_tool(self, tool_name: str, tool_config: Dict[str, Any]):
         """Execute a single analysis tool."""
-        self.log(f"\n{'=' * 3} Running {tool_name} {'=' * (60 - len(tool_name) - 12)}", tool_log=False)
+        self.log(f"\n{'=' * 3} Running {tool_name} {'=' * (60 - len(tool_name) - 12)}")
         
-        # Setup logging
-        log_file = self.setup_tool_logging(tool_name, self.rundir)
-        self.log(f"Logging run to: {log_file}", tool_log=False)
-        
-        execution_mode = tool_config.get('execution_mode', self.config['settings']['default_execution_mode'])
-        if execution_mode == 'per_sample' and tool_config.get('sample_output_dir'):
-            sample_log_pattern = self.substitute_variables(f"{tool_config['sample_output_dir']}/{{sample_id}}.{tool_name}.log", "*")
-            self.log(f"Logging per-sample tool output to: {sample_log_pattern}", tool_log=False)
-        
-        # Show execution mode and parallelism
-        if execution_mode == 'per_sample':
-            max_threads = tool_config.get('parallel', self.config['settings']['default_parallel'])
-            self.log(f"Run mode: {max_threads} samples in parallel", tool_log=False)
-        else:
-            self.log(f"Run mode: batch", tool_log=False)
-        
-        # Check dependencies first
-        deps_ok, missing_details = self.check_dependencies(tool_name)
-        if not deps_ok:
-            error_msg = f"{tool_name} cannot run due to missing dependencies:\n" + "\n".join(f"  - {detail}" for detail in missing_details)
-            if self.skip_missing:
-                self.log(f"⚠️ {tool_name} skipped - {error_msg}", tool_log=False)
-                return
+        # Use context manager for automatic cleanup
+        with self.tool_logging_context(tool_name) as log_file:
+            self.log(f"Logging run to: {log_file}")
+            
+            execution_mode = tool_config.get('execution_mode', self.config['settings']['default_execution_mode'])
+            if execution_mode == 'per_sample' and tool_config.get('sample_output_dir'):
+                sample_log_pattern = self.substitute_variables(f"{tool_config['sample_output_dir']}/{{sample_id}}.{tool_name}.log", "*")
+                self.log(f"Logging per-sample tool output to: {sample_log_pattern}")
+            
+            # Show execution mode and parallelism
+            if execution_mode == 'per_sample':
+                max_threads = tool_config.get('parallel', self.config['settings']['default_parallel'])
+                self.log(f"Run mode: {max_threads} samples in parallel")
             else:
-                raise RuntimeError(error_msg)
-        
-        # Check if should skip due to existing outputs
-        if self.check_and_skip_tool(tool_name, tool_config):
-            return
-        
-        # Start execution
-        start_time = time.time()
-        self.log(f"Start: {self.get_timestamp()}")
-        
-        self.current_tool_modules = tool_config.get('modules', [])
-        
-        # Create output directory if needed
-        if tool_config.get('output_dir') and not self.dry_run:
-            Path(self.substitute_variables(tool_config['output_dir'])).mkdir(parents=True, exist_ok=True)
-        
-        # Execute based on mode
-        memory_values, cpu_values = self._execute_tool_commands(tool_name, tool_config, execution_mode)
-        
-        # Complete and report
-        self.log(f"✅ {tool_name} completed successfully", tool_log=False)
-        
-        runtime = time.time() - start_time
-        self.log(f"End: {self.get_timestamp()}", tool_log=False)
-        
-        self._report_resource_usage(tool_name, execution_mode, runtime, memory_values, cpu_values)
+                self.log(f"Run mode: batch")
+            
+            # Check dependencies first
+            deps_ok, missing_details = self.check_dependencies(tool_name)
+            if not deps_ok:
+                error_msg = f"{tool_name} cannot run due to missing dependencies:\n" + "\n".join(f"  - {detail}" for detail in missing_details)
+                if self.skip_missing:
+                    self.log(f"⚠️ {tool_name} skipped - {error_msg}")
+                    return
+                else:
+                    raise RuntimeError(error_msg)
+            
+            # Check if should skip due to existing outputs
+            if self.check_and_skip_tool(tool_name, tool_config):
+                return
+            
+            # Start execution
+            start_time = time.time()
+            self.log(f"Start: {self.get_timestamp()}")
+            
+            self.current_tool_modules = tool_config.get('modules', [])
+            
+            # Create output directory if needed
+            if tool_config.get('output_dir') and not self.dry_run:
+                Path(self.substitute_variables(tool_config['output_dir'])).mkdir(parents=True, exist_ok=True)
+            
+            # Execute based on mode
+            memory_values, cpu_values = self._execute_tool_commands(tool_name, tool_config, execution_mode)
+            
+            # Complete and report
+            self.log(f"✅ {tool_name} completed successfully")
+            
+            runtime = time.time() - start_time
+            self.log(f"End: {self.get_timestamp()}")
+            
+            self._report_resource_usage(tool_name, execution_mode, runtime, memory_values, cpu_values)
+        # self.current_log_file automatically cleared here by context manager
 
     def _execute_tool_commands(self, tool_name: str, tool_config: Dict[str, Any], execution_mode: str) -> Tuple[List[float], List[float]]:
         """Execute tool commands and collect resource metrics."""
@@ -611,10 +629,10 @@ class PipelineRunner:
                 'runtime_seconds': runtime
             }
             
-            self.log(f"Runtime: {self.format_runtime(runtime)} | Peak Memory: {stats['max_memory_gb']:.2f} GB | CPU: {stats['max_cpu_cores']:.1f} cores", console=True, tool_log=False)
+            self.log(f"Runtime: {self.format_runtime(runtime)} | Peak Memory: {stats['max_memory_gb']:.2f} GB | CPU: {stats['max_cpu_cores']:.1f} cores")
             self.resource_data.append(stats)
         else:
-            self.log(f"Runtime: {self.format_runtime(runtime)}", console=True, tool_log=False)
+            self.log(f"Runtime: {self.format_runtime(runtime)}")
 
     def format_runtime(self, seconds: float) -> str:
         """Format runtime in human-readable format."""
@@ -677,14 +695,14 @@ class PipelineRunner:
             if missing_samples:
                 missing_count = len(missing_samples)
                 sample_list = ', '.join(missing_samples[:5]) + ('...' if missing_count > 5 else '')
-                self.log(f"⚠️  {tool_name}: missing outputs for {missing_count} samples: {sample_list}", tool_log=False)
+                self.log(f"⚠️  {tool_name}: missing outputs for {missing_count} samples: {sample_list}")
                 return False
             
             if not output_file:
                 # Create display pattern by replacing {sample_id} with *
                 display_pattern = self.substitute_variables(sample_output_file.replace('{sample_id}', '*'))
-                self.log(f"✅ {tool_name}: all {len(existing_samples)} sample outputs exist: {display_pattern}", tool_log=False)
-                self.log(f"✅ {tool_name} skipped.", tool_log=False)
+                self.log(f"✅ {tool_name}: all {len(existing_samples)} sample outputs exist: {display_pattern}")
+                self.log(f"✅ {tool_name} skipped.")
                 return True
         
         # Check final output
@@ -694,17 +712,17 @@ class PipelineRunner:
                 # For per_sample mode with sample outputs already verified, check content
                 if execution_mode == 'per_sample' and sample_output_file:
                     if self._check_file_empty_or_header_only(output_path):
-                        self.log(f"⚠️  {tool_name}: final output exists but appears empty or header-only: {output_path}", tool_log=False)
-                        self.log(f"⚠️  {tool_name} skipped (but check output quality).", tool_log=False)
+                        self.log(f"⚠️  {tool_name}: final output exists but appears empty or header-only: {output_path}")
+                        self.log(f"⚠️  {tool_name} skipped (but check output quality).")
                     else:
-                        self.log(f"✅ {tool_name}: all sample outputs and final output exist", tool_log=False)
-                        self.log(f"✅ {tool_name} skipped.", tool_log=False)
+                        self.log(f"✅ {tool_name}: all sample outputs and final output exist")
+                        self.log(f"✅ {tool_name} skipped.")
                 else:
                     # Batch mode or no sample outputs
-                    self.log(f"✅ {tool_name} skipped (output exists: {output_path})", tool_log=False)
+                    self.log(f"✅ {tool_name} skipped (output exists: {output_path})")
                 return True
             elif sample_output_file:
-                self.log(f"⚠️  {tool_name}: sample outputs exist but final output missing: {output_path}", tool_log=False)
+                self.log(f"⚠️  {tool_name}: sample outputs exist but final output missing: {output_path}")
                 return False
         
         return False
@@ -811,11 +829,11 @@ class PipelineRunner:
         if not self.runid or 'setup_commands' not in self.config:
             return
         
-        self.log("Running setup commands...", console=True, tool_log=False)
+        self.log("Running setup commands...")
         
         for command in self.config['setup_commands']:
             full_command = self.substitute_variables(command)
-            self.log(f"Setup: {full_command}", console=True, tool_log=False)
+            self.log(f"Setup: {full_command}")
             
             if not self.dry_run:
                 result = subprocess.run(
@@ -828,11 +846,13 @@ class PipelineRunner:
         """Execute cleanup commands at the end of pipeline execution."""
         if 'cleanup_commands' not in self.config:
             return
-        
-        self.log("Running cleanup commands...", console=True, tool_log=False)
+
+        self.log("Running cleanup commands...")
+        # Log details to pipeline log only (not console, not tool logs)
         for command in self.config['cleanup_commands']:
             full_command = self.substitute_variables(command)
-            self.log(f"Cleanup: {full_command}", console=True, tool_log=False)
+            if self.pipeline_log_file:
+                self.write_to_file(f"Cleanup: {full_command}", self.pipeline_log_file)
             
             if not self.dry_run:
                 result = subprocess.run(
@@ -840,7 +860,10 @@ class PipelineRunner:
                 )
                 # Don't fail the pipeline if cleanup fails, just log it
                 if result.returncode != 0:
-                    self.log(f"Warning: Cleanup command failed: {full_command}", console=True, tool_log=False)
+                    if self.pipeline_log_file:
+                        self.write_to_file(f"Warning: Cleanup command failed: {full_command}", self.pipeline_log_file)
+        
+        self.log("Cleanup done.", tool_log=False)
 
     def run_pipeline(self, tools: Optional[List[str]] = None):
         """Execute the pipeline."""
@@ -864,14 +887,14 @@ class PipelineRunner:
         self.create_resource_log()      # Create resource log file
         
         # print tools that will be run
-        self.log(f"\nTools to run: {tools_to_run}", console=True, tool_log=False)
+        self.log(f"\nTools to run: {tools_to_run}")
         
         # Run tools (including special ones)
         for tool_name in tools_to_run:
             try:
                 if tool_name == 'setup':
                     if not self.runid:
-                        self.log("Setup can only be run in runid mode (use -r)", console=True, tool_log=False)
+                        self.log("Setup can only be run in runid mode (use -r)")
                         continue
                     self.setup_run_directory()
                 elif tool_name == 'cleanup':
@@ -879,11 +902,18 @@ class PipelineRunner:
                 elif tool_name in self.config['tools']:
                     self.run_tool(tool_name, self.config['tools'][tool_name])
                 else:
-                    self.log(f"⚠️  Unknown tool: {tool_name}", console=True, tool_log=False)
+                    self.log(f"⚠️  Unknown tool: {tool_name}")
             except Exception as e:
-                self.log(f"❌ {tool_name} failed: {e}", console=True, tool_log=False)
+                self.log(f"❌ {tool_name} failed: {e}")
                 if not self.skip_missing:
                     sys.exit(1)
+
+        # If not in tools mode, run cleanup automatically
+        if not tools:
+            self.cleanup_run_directory()
+        
+        # Clear current_log_file since cleanup may have deleted tool directories
+        self.current_log_file = None
         
         # Write resource data
         self.write_resource_data()
@@ -891,24 +921,20 @@ class PipelineRunner:
         # Log versions for actual tools that were run (not setup/cleanup)
         actual_tools = [t for t in tools_to_run if t in self.config['tools']]
         if actual_tools:
-            self.log(f"\n{'=' * 3} Logging tool versions {'=' * 37}", console=True, tool_log=False)
+            self.log(f"\n{'=' * 3} Logging tool versions {'=' * 37}")
             for tool_name in actual_tools:
                 self.log_tool_version(tool_name, self.config['tools'][tool_name])
-            self.log(f"\nDone.\nVersion info written to: {self.versions_file}", console=True, tool_log=False)
+            self.log(f"\nDone.\nVersion info written to: {self.versions_file}")
         
         if self.monitor:
-            self.log(f"Resource usage written to: {self.resource_file}", console=True, tool_log=False)
-        
-        # Handle cleanup - only run automatically if no --tools specified
-        if not tools:
-            self.cleanup_run_directory()
+            self.log(f"Resource usage written to: {self.resource_file}")
         
         # Summary
         tools_summary = f"specified tools ({', '.join(tools_to_run)})" if tools else "all tools"
-        self.log("\n" + "=" * 50, console=True, tool_log=False)
-        self.log(f"Pipeline completed for {self.runid} - {tools_summary}", console=True, tool_log=False)
-        self.log(f"Timestamp: {self.get_timestamp(include_seconds=False)}", console=True, tool_log=False)
-        self.log("=" * 50, console=True, tool_log=False)
+        self.log("\n" + "=" * 50)
+        self.log(f"Pipeline completed for {self.runid} - {tools_summary}")
+        self.log(f"Timestamp: {self.get_timestamp(include_seconds=False)}")
+        self.log("=" * 50)
 
     def write_resource_data(self):
         """Write accumulated resource data to file."""
@@ -1000,7 +1026,7 @@ class PipelineRunner:
         version, tool_path, database = self.get_tool_version_info(tool_name, tool_config)
         with open(self.versions_file, 'a') as f:
             f.write(f"{tool_name}\t{version}\t{tool_path}\t{database}\n")
-        self.log(f"  Logged: {tool_name}\t{version}\t{tool_path}\t{database}", console=True, tool_log=False)
+        self.log(f"  Logged: {tool_name}\t{version}\t{tool_path}\t{database}")
         
         # Log sub-tools if defined
         for sub_tool in tool_config.get('sub_tools', []):
@@ -1014,7 +1040,7 @@ class PipelineRunner:
             version, tool_path, database = self.get_tool_version_info(sub_tool['name'], sub_config)
             with open(self.versions_file, 'a') as f:
                 f.write(f"{sub_name}\t{version}\t{tool_path}\t{database}\n")
-            self.log(f"  Logged: {sub_name}\t{version}\t{tool_path}\t{database}", console=True, tool_log=False)
+            self.log(f"  Logged: {sub_name}\t{version}\t{tool_path}\t{database}")
     
     def _validate_config(self):
         """Validate required configuration settings."""

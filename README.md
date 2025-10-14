@@ -3,25 +3,40 @@
 
 **A flexible, YAML-configured workflow-like pipeline for bacterial genome analysis from Oxford Nanopore sequencing data.**
 
-BactoPipe automates the complete analysis of bacterial genomes from raw ONT sequencing data through final characterization. It performs high-quality hybrid assembly using Autocycler (with Dragonflye fallback if Autocycler fails), followed by Medaka polishing and downstream analysis and typing including gene annotation, antimicrobial resistance detection, and plasmid identification. 
+## Table of Contents
+- [Overview](#overview)
+- [Quick Start](#quick-start)
+- [Command Line Options](#command-line-options)
+- [Input Requirements](#input-requirements)
+- [Pipeline Workflow](#pipeline-workflow)
+- [Expected Output Structure](#expected-output-structure)
+- [Configuration Guide](#configuration-guide)
+- [Installation and Dependencies](#installation-and-dependencies)
+- [Resource Management](#resource-management)
+- [FAQ](#faq)
 
-*Note: as currently configured, it does not run QC steps but instead expects a QC file as input from a separate QC pipeline*
+## Overview
+
+BactoPipe automates the complete analysis of bacterial genomes from raw ONT sequencing data through final characterization. It performs high-quality assembly using Autocycler (with Dragonflye fallback), followed by Medaka polishing and downstream analysis including gene annotation, antimicrobial resistance detection, and plasmid identification.
+
+*Note: Pipeline expects QC-processed data as input from a separate QC workflow*
 
 **Key Features:**
-- **Smart Assembly Strategy**: Autocycler for optimal bacterial genome assembly with automatic Dragonflye fallback if Autocycler fails; also splits Medaka polishing to a separate step, to allow assembly (CPU-heavy) to run in higher parallel mode than Medaka (GPU-heavy) can handle
-- **YAML-Configured**: Human-readable configuration makes adding new tools or changing parameters simple and easy to track exactly what commands are being run
-- **Resource Monitoring**: Built-in per-tool/per-sample CPU/memory tracking for accurate time and resource requirement tracking, with optimization suggestions
-- **Robust Execution**: Automatic output detection, dependency management, and error handling
-- **Robust Recovery**: Re-run will skip existing output (unless using --force mode), for easy recovery from failure
-- **Single Tool Runs**: Can run just a single tool at a time
-- **Version Tracking**: Tracks version numbers and script/database paths for reproducibility
-- **Comprehensive Logging**: Produces detailed full-pipeline and per-sample run logging for traceability and error recovery
-- **HPC Ready**: Module system integration and configurable parallelism for high-performance computing
+- **Smart Assembly Strategy**: Autocycler for optimal bacterial genome assembly with automatic Dragonflye fallback; assembly and Medaka polishing run as separate steps for optimized parallelism
+- **Assembly Method Tracking**: Descriptive filenames preserve assembly method through the pipeline (e.g., `sample.autocycler-reori-polished.fa`)
+- **YAML-Configured**: Human-readable configuration makes adding tools or changing parameters transparent and traceable
+- **Resource Monitoring**: Built-in per-tool/per-sample CPU/memory tracking with optimization suggestions
+- **Robust Execution**: Automatic output detection, dependency management, and intelligent error handling
+- **Smart Recovery**: Re-runs skip existing outputs (unless `--force`), enabling easy recovery from failures
+- **Selective Execution**: Run individual tools or tool subsets via `--tools`
+- **Version Tracking**: Logs tool versions, script paths, and database locations for full reproducibility
+- **Comprehensive Logging**: Detailed pipeline and per-sample logs for traceability and debugging
+- **HPC Ready**: Module system integration with configurable parallelism for high-performance computing
 
 ## Quick Start
 
 ```bash
-# Load python module for required python packages
+# Load python module for required packages
 module load python
 
 # Run complete pipeline for a normal sequencing run
@@ -142,38 +157,54 @@ flowchart TD
 
 ```
 /data/runs/ont/analysis/RUNID/
-├── RUNID.run.log                # Main pipeline execution log
-├── RUNID.versions.TIMESTAMP.tsv # Tool versions and databases used
-├── RUNID.summary.tsv            # Final summary table (all results)
-├── RUNID.plasmid_contigs.tsv    # Plasmid-AMR contig analysis
-├── samples.tsv                  # Sample manifest (copied from QC)
-├── assembly/                    # Genome assemblies
-│   ├── {sample_id}.fa              # Final polished assemblies
-│   ├── {sample_id}.unpolished.fa   # Raw assemblies
-│   ├── autocycler/{sample_id}/     # Autocycler output
-│   ├── dragonflye/{sample_id}/     # Dragonflye output (fallback)
-│   ├── medaka/{sample_id}/         # Medaka polishing intermediates
-│   │   ├── round1/                 # First polishing round
-│   │   ├── round2/                 # Second polishing round  
-│   │   └── {sample_id}.polished.fa # Final polished output
-│   └── logs/                       # Consolidated assembly logs
-├── prokka/                      # Prokka annotations
-│   └── {sample_id}/                # Per-sample annotation files (.gff, .faa, etc.)
-├── abritamr/                    # AMR analysis
-│   ├── abritamr.txt                # Combined results
-│   └── {sample_id}/                # Per-sample detailed results
-├── mlst/                        # MLST typing
-│   └── mlst.csv                    # Combined results
-├── plasmidfinder/               # Plasmid replicon identification
-│   ├── plasmidfinder_results.tsv  # Combined results
-│   └── {sample_id}/                # Per-sample detailed results
-├── checkm/                      # Assembly QC metrics
-│   ├── checkm_results.tsv         # Combined results
-│   └── {sample_id}/                # Per-sample detailed results
-└── padloc/                      # Phage defense systems
-    ├── padloc_summary.tsv          # Combined results
-    └── {sample_id}/                # Per-sample PADLOC output
+├── RUNID.run.log                                     # Main pipeline execution log
+├── RUNID.versions.tsv                                # Tool versions and databases used
+├── RUNID.summary.tsv                                 # Final summary table (all results)
+├── RUNID.plasmid_contigs.tsv                         # Plasmid-AMR contig analysis
+├── samples.tsv                                       # Sample manifest (copied from QC)
+├── assembly/                                         # Genome assembly output
+│   ├── {sample_id}.fa                                  #  Final polished assemblies (symlinks)
+│   ├── unpolished_best/                                #  Unpolished assembly links
+│   │   └── {sample}.{method}-unpolished.fa                #  e.g., sample.autocycler-reori-unpolished.fa
+│   ├── autocycler/{sample_id}/                         #  Autocycler output
+│   ├── dragonflye/{sample_id}/                         #  Dragonflye output (fallback)
+│   ├── medaka/{sample_id}/                             #  Medaka polishing intermediates
+│   │   ├── round1/                                        #  First polishing round
+│   │   ├── round2/                                        #  Second polishing round  
+│   │   └── {sample}.{method}-polished.fa                  #  e.g., sample.autocycler-reori-polished.fa
+│   └── logs/                                           #  Tool-level assembly logs
+├── prokka/                                           # Prokka annotations
+│   └── {sample_id}/                                    #  Per-sample annotation files (.gff, .faa, etc.)
+├── abritamr/                                         # AMR analysis
+│   ├── abritamr.txt                                    #   Combined results
+│   └── {sample_id}/                                    #   Per-sample detailed results
+├── mlst/                                             # MLST typing
+│   └── mlst.csv                                        #   Combined results
+├── plasmidfinder/                                    # Plasmid replicon identification
+│   ├── plasmidfinder_results.tsv                       #   Combined results
+│   └── {sample_id}/                                    #   Per-sample detailed results
+├── checkm/                                           # Assembly QC metrics
+│   ├── checkm_results.tsv                              #   Combined results
+│   └── {sample_id}/                                    #   Per-sample detailed results
+└── padloc/                                           # Phage defense systems
+    ├── padloc_summary.tsv                              #   Combined results
+    └── {sample_id}/                                    #   Per-sample PADLOC output
 ```
+
+### Key Output Files
+
+**Summary Table (`{runid}.summary.tsv`)** - Comprehensive results combining all analyses:
+- QC metrics: `number_of_reads`, `number_of_bases`, `median_read_length`, `n50`, `median_qual`
+- Species identification: `expected_species`, `identified_species`, `identified_genome_size`
+- Assembly info: `assembly_method`, `contigs`, `num_contigs`, `longest_contig`, `coverage`
+- Quality metrics: `assembly_size_bp`, `checkm_completeness`, `checkm_contamination`, `checkm_heterogeneity`
+- Typing: `MLST_scheme`, `ST`
+- AMR genes and plasmids (columns from abritamr output)
+
+**Plasmid Analysis (`{runid}.plasmid_contigs.tsv`)** - Detailed plasmid-AMR mapping:
+- Links plasmid replicons to resistance genes by contig
+- Includes contig length and circularity information
+- Useful for tracking plasmid-mediated resistance
 
 ## Configuration Guide
 
@@ -371,3 +402,81 @@ BactoPipe includes intelligent resource monitoring and optimization:
 - **Configurable limits** with safety caps to prevent system overload
 
 Resource logs are saved to `{runid}.resource_usage.{timestamp}.tsv` for analysis.
+
+## FAQ
+
+**Quick Links:**
+1. [How are assembly files organized and named?](#1-how-are-assembly-files-organized-and-named)
+2. [What if a tool fails for some samples?](#2-what-if-a-tool-fails-for-some-samples)
+3. [How do I resume a failed run?](#3-how-do-i-resume-a-failed-run)
+4. [Can I run just specific tools?](#4-can-i-run-just-specific-tools)
+5. [How do I add a new analysis tool?](#5-how-do-i-add-a-new-analysis-tool)
+6. [Where are the log files?](#6-where-are-the-log-files)
+7. [What does the resource usage file show?](#7-what-does-the-resource-usage-file-show)
+8. [How do I optimize parallelism?](#8-how-do-i-optimize-parallelism)
+9. [Can I use this pipeline without the module system?](#9-can-i-use-this-pipeline-without-the-module-system)
+
+### 1. How are assembly files organized and named?
+
+Assembly files use a hierarchical naming scheme to preserve method information throughout the pipeline:
+
+**Unpolished assemblies** (in `assembly/unpolished_best/`):
+- `{sample}.autocycler-reori-unpolished.fa` - Autocycler with reorientation
+- `{sample}.autocycler-unpolished.fa` - Autocycler without reorientation
+- `{sample}.dragonflye-unpolished.fa` - Dragonflye fallback assembly
+
+**Polished assemblies** (in `assembly/medaka/{sample}/`):
+- `{sample}.autocycler-reori-polished.fa` - Polished Autocycler with reorientation
+- `{sample}.autocycler-polished.fa` - Polished Autocycler without reorientation
+- `{sample}.dragonflye-polished.fa` - Polished Dragonflye assembly
+
+**Final outputs** (in `assembly/`):
+- `{sample}.fa` - Symlink to final polished assembly (standard interface for downstream tools)
+
+This naming preserves assembly provenance throughout the pipeline while maintaining a clean interface for tools that don't need method details.
+
+### 2. What if a tool fails for some samples?
+
+By default, the pipeline will stop if a tool fails. Use `--skip` to continue processing even when tools fail. You can also specify samples that are allowed to fail (e.g., negative controls) in the config:
+
+```yaml
+settings:
+  allow_failed_sample_ids: ["NEG", "BLANK"]
+```
+
+### 3. How do I resume a failed run?
+
+Simply re-run the same command. The pipeline automatically detects existing outputs and skips completed steps. Use `--force` to override this and rerun everything.
+
+### 4. Can I run just specific tools?
+
+Yes! Use `--tools` followed by the tool names:
+```bash
+python3 bactopipe.py -r RUNID --tools prokka abritamr mlst
+```
+
+### 5. How do I add a new analysis tool?
+
+Add it to `bactopipe_config.yaml` under the `tools:` section. See the Configuration Guide for details. Don't forget to add any dependencies to the `dependencies:` section.
+
+### 6. Where are the log files?
+
+- **Main pipeline log**: `{rundir}/{runid}.run.log`
+- **Tool logs**: `{rundir}/{tool_name}/{tool_name}.log`
+- **Sample logs**: `{rundir}/{tool_name}/{sample_id}/{sample_id}.{tool_name}.log`
+
+### 7. What does the resource usage file show?
+
+The `{runid}.resource_usage.tsv` file shows:
+- Peak memory and CPU usage per tool
+- Current parallelism settings
+- Suggested parallelism based on system resources
+- Bottleneck identification (memory vs CPU)
+
+### 8. How do I optimize parallelism?
+
+Check the `suggested_threads` column in the resource usage file. The pipeline calculates optimal parallelism based on tool resource usage and available system resources. Update the `parallel:` setting in the config for that tool.
+
+### 9. Can I use this pipeline without the module system?
+
+Yes! If tools are in your PATH, the pipeline will find them. You can also specify exact paths in the config using `tool_path:`.
