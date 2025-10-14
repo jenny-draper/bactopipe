@@ -3,8 +3,7 @@
 BactoPipe - Bacterial ONT Sequence Analysis Pipeline
 ==============================================================================
 
-A YAML-configurable pipeline framework for bacterial genome analysis,
-currently configured for processing ONT WGS data post-QC.
+A YAML-configurable pipeline framework for bacterial genome analysis.
 Features parallel processing, resource monitoring, and 
 intelligent dependency management.
 
@@ -42,7 +41,6 @@ DEFAULTS = {
     'default_database_value': 'none',
     'default_unknown_value': 'unknown',
     'sample_id_column_name': 'SAMPLE_ID',  # Column name instead of position
-    'header_lines_to_skip': 1,
     'subprocess_timeout': 10,
     'pipeline_log_pattern': '{runid}.run.log',
     'versions_log_pattern': '{runid}.versions.{timestamp}.tsv',
@@ -54,7 +52,7 @@ DEFAULTS = {
 class PipelineRunner:
     def __init__(self, config_file: str, runid: str = None, input_file: str = None, output_dir: str = None,
              dry_run: bool = False, force: bool = False, skip_missing: bool = False, clean: bool = False, 
-             monitor: bool = True):
+             monitor: bool = True, verbose: bool = False):
     
         with open(config_file, 'r') as f:
             self.config = yaml.safe_load(f)
@@ -83,14 +81,16 @@ class PipelineRunner:
         self.force = force
         self.skip_missing = skip_missing
         self.clean = clean
+        self.verbose = verbose
         self.current_log_file = None
         self.pipeline_log_file = None
-        self.resource_data = []  # Store resource usage data
-        self.system_resources = self.get_system_resources()  # Query system once at startup
+        self.resource_data = []
+        self.system_resources = self.get_system_resources()
+        self.executed_tools = []  # Track which tools actually ran
 
-    def get_timestamp(self, include_seconds: bool = True) -> str:
+    def get_timestamp(self) -> str:
         """Get current timestamp in standard format."""
-        return datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S' if include_seconds else '%Y-%m-%d %H:%M')
+        return datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
     def get_filename_timestamp(self) -> str:
         """Get timestamp string suitable for filenames (YYYYMMDDHHMM)."""
@@ -145,13 +145,11 @@ class PipelineRunner:
         self.log(f"Output directory: {self.rundir}")
         self.log(f"Target samples file: {self.input_file}")
         
-        # System resources (only show if monitoring is enabled)
         if self.monitor:
             cpu_info = self._format_cpu_info()
             mem_info = f"{self.system_resources['memory_gb']} GB RAM" if self.system_resources['memory_gb'] != 'unknown' else "RAM: unknown"
             self.log(f"Available System Resources: {cpu_info}, {mem_info}")
         
-        # Settings
         settings = []
         if self.dry_run: settings.append("DRY RUN")
         if self.force: settings.append("FORCE")
@@ -261,10 +259,11 @@ class PipelineRunner:
         # Format command with proper indentation for all lines (3 spaces instead of tab)
         formatted_command = '\n'.join('   ' + line for line in full_command.rstrip().split('\n'))
         
-        self.log(f"{running_msg}\n{formatted_command}", tool_log=False)
+        # Only print commands to console if verbose flag is set
+        self.log(f"{running_msg}\n{formatted_command}", console=self.verbose, tool_log=False)
         target_log_file = log_file or self.current_log_file
         if target_log_file:
-            self.log(f"{prefix}Logging to: {target_log_file}", tool_log=False)
+            self.log(f"{prefix}Logging to: {target_log_file}", console=self.verbose, tool_log=False)
         
         # Log to tool-specific file with context
         log_msg = f"Bactopipe: Running {context}: {full_command}" if context else f"Bactopipe: Running: {full_command}"
@@ -385,11 +384,14 @@ class PipelineRunner:
                 sample_log_file = dir_path / log_filename
                 self.init_log_file(sample_log_file, f"{tool_name} log for {sample_id}")
                 
-                # Log directory creation after we've set up logging
+                # Log directory creation - only to logs and verbose mode
                 if not self.dry_run:
-                    self.log(f"{sample_id}: Created directory {dir_path}", sample_log=sample_log_file)
+                    self.log(f"{sample_id}: Created directory {dir_path}", console=self.verbose, sample_log=sample_log_file)
             
             self.log(f"{sample_id}: Starting", sample_log=sample_log_file)
+            
+            # Start timing
+            start_time = time.time()
             
             # Verify required files
             for file_pattern in tool_config.get('required_files', []):
@@ -402,7 +404,9 @@ class PipelineRunner:
             command = self.substitute_variables(tool_config['command'], sample_id, tool_config)
             peak_memory_gb, cpu_cores, user_time = self.run_command(command, sample_id=sample_id, log_file=sample_log_file, context=f"{tool_name} command")
             
-            self.log(f"{sample_id}: Completed", sample_log=sample_log_file)
+            # Calculate runtime and format completion message
+            runtime = time.time() - start_time
+            self.log(f"{sample_id}: Completed (runtime: {self.format_runtime(runtime)})", sample_log=sample_log_file)
             return f"{sample_id}: completed", peak_memory_gb, cpu_cores, user_time
             
         except Exception as e:
@@ -503,6 +507,9 @@ class PipelineRunner:
             
             # Execute based on mode
             memory_values, cpu_values = self._execute_tool_commands(tool_name, tool_config, execution_mode)
+            
+            # Mark tool as executed
+            self.executed_tools.append(tool_name)
             
             # Complete and report
             self.log(f"✅ {tool_name} completed successfully")
@@ -727,13 +734,17 @@ class PipelineRunner:
         
         return False
 
-    def calculate_resource_limits(self, max_memory_gb: float, max_cpu_cores: float) -> Dict[str, Any]:
-        """Calculate suggested parallelism based on system resources."""
+    def calculate_resource_limits(self, max_memory_gb: float, max_cpu_cores: float) -> Optional[Dict[str, Any]]:
+        """Calculate suggested parallelism based on system resources. Returns None if calculation not possible."""
         available_cores = self.system_resources.get('logical_cores', self.system_resources.get('cpu_cores', DEFAULTS['default_unknown_value']))
         available_memory = self.system_resources.get('memory_gb', DEFAULTS['default_unknown_value'])
         
-        if available_cores == DEFAULTS['default_unknown_value'] or available_memory == DEFAULTS['default_unknown_value'] or max_memory_gb <= 0 or max_cpu_cores <= 0:
-            return {k: DEFAULTS['default_unknown_value'] for k in ['suggested', 'memory_limit', 'cpu_limit', 'memory_recommended', 'cpu_recommended', 'bottleneck', 'mem_total_percent', 'cpu_total_percent']}
+        # Return None if we can't calculate (instead of dict of 'unknown' values)
+        if (available_cores == DEFAULTS['default_unknown_value'] or 
+            available_memory == DEFAULTS['default_unknown_value'] or 
+            max_memory_gb <= 0 or 
+            max_cpu_cores <= 0):
+            return None
         
         utilization = DEFAULTS['resource_utilization_target']
         
@@ -829,7 +840,7 @@ class PipelineRunner:
         if not self.runid or 'setup_commands' not in self.config:
             return
         
-        self.log("Running setup commands...")
+        self.log(f"\n{'=' * 3} Running setup {'=' * 44}")
         
         for command in self.config['setup_commands']:
             full_command = self.substitute_variables(command)
@@ -841,13 +852,15 @@ class PipelineRunner:
                 )
                 if result.returncode != 0:
                     raise RuntimeError(f"Setup command failed: {full_command}")
+        
+        self.log("✅ Setup completed successfully")
 
     def cleanup_run_directory(self):
         """Execute cleanup commands at the end of pipeline execution."""
         if 'cleanup_commands' not in self.config:
             return
 
-        self.log("Running cleanup commands...")
+        self.log(f"\n{'=' * 3} Running cleanup {'=' * 42}")
         # Log details to pipeline log only (not console, not tool logs)
         for command in self.config['cleanup_commands']:
             full_command = self.substitute_variables(command)
@@ -863,7 +876,7 @@ class PipelineRunner:
                     if self.pipeline_log_file:
                         self.write_to_file(f"Warning: Cleanup command failed: {full_command}", self.pipeline_log_file)
         
-        self.log("Cleanup done.", tool_log=False)
+        self.log("✅ Cleanup completed successfully")
 
     def run_pipeline(self, tools: Optional[List[str]] = None):
         """Execute the pipeline."""
@@ -879,15 +892,15 @@ class PipelineRunner:
         # Determine what tools to run
         tools_to_run = tools if tools else list(self.config['tools'].keys())
         
-        # Handle setup - only run automatically if no --tools specified
-        if not tools and self.runid:
-            self.setup_run_directory()      # Run setup commands if in runid mode
-        
         self.create_versions_log()      # Create versions log file
         self.create_resource_log()      # Create resource log file
         
         # print tools that will be run
         self.log(f"\nTools to run: {tools_to_run}")
+        
+        # Handle setup (don't run automatically in tools mode)
+        if not tools and self.runid:
+            self.setup_run_directory()      # Run setup commands if in runid mode
         
         # Run tools (including special ones)
         for tool_name in tools_to_run:
@@ -918,13 +931,20 @@ class PipelineRunner:
         # Write resource data
         self.write_resource_data()
         
-        # Log versions for actual tools that were run (not setup/cleanup)
-        actual_tools = [t for t in tools_to_run if t in self.config['tools']]
-        if actual_tools:
+        # Log versions only for tools that actually executed
+        if self.executed_tools:
             self.log(f"\n{'=' * 3} Logging tool versions {'=' * 37}")
-            for tool_name in actual_tools:
+            for tool_name in self.executed_tools:
                 self.log_tool_version(tool_name, self.config['tools'][tool_name])
-            self.log(f"\nDone.\nVersion info written to: {self.versions_file}")
+            
+            # Print the entire versions file content
+            self.log("Tool versions used:\n")
+            with open(self.versions_file, 'r') as f:
+                for line in f:
+                    self.log(f"  {line.rstrip()}")
+            self.log("=" * 63)
+            self.log("\nDone.")
+            self.log(f"Version info written to: {self.versions_file}")
         
         if self.monitor:
             self.log(f"Resource usage written to: {self.resource_file}")
@@ -933,7 +953,7 @@ class PipelineRunner:
         tools_summary = f"specified tools ({', '.join(tools_to_run)})" if tools else "all tools"
         self.log("\n" + "=" * 50)
         self.log(f"Pipeline completed for {self.runid} - {tools_summary}")
-        self.log(f"Timestamp: {self.get_timestamp(include_seconds=False)}")
+        self.log(f"Timestamp: {self.get_timestamp()}")
         self.log("=" * 50)
 
     def write_resource_data(self):
@@ -950,15 +970,22 @@ class PipelineRunner:
                 # Calculate resource limits and suggestions
                 limits = self.calculate_resource_limits(data['max_memory_gb'], data['max_cpu_cores'])
                 
+                # Write basic stats
                 f.write(f"{data['tool']}\t{data['execution_mode']}\t{data['measurement_count']}\t")
                 f.write(f"{data['mean_memory_gb']:.3f}\t{data['max_memory_gb']:.3f}\t")
                 f.write(f"{data['mean_cpu_cores']:.1f}\t{data['max_cpu_cores']:.1f}\t")
-                f.write(f"{data['runtime_seconds']:.1f}\t")
-                f.write(f"{current_threads}\t{limits['suggested']}\t")
-                f.write(f"{limits['memory_recommended']}\t{limits['memory_limit']}\t")
-                f.write(f"{limits['cpu_recommended']}\t{limits['cpu_limit']}\t")
-                f.write(f"{limits['bottleneck']}\t")
-                f.write(f"{limits['mem_total_percent']}\t{limits['cpu_total_percent']}\n")
+                f.write(f"{data['runtime_seconds']:.1f}\t{current_threads}\t")
+                
+                # Write resource calculations or 'unknown' placeholders
+                if limits is None:
+                    # Write 'unknown' for all calculated fields
+                    f.write(f"{DEFAULTS['default_unknown_value']}\t" * 8 + "\n")
+                else:
+                    f.write(f"{limits['suggested']}\t")
+                    f.write(f"{limits['memory_recommended']}\t{limits['memory_limit']}\t")
+                    f.write(f"{limits['cpu_recommended']}\t{limits['cpu_limit']}\t")
+                    f.write(f"{limits['bottleneck']}\t")
+                    f.write(f"{limits['mem_total_percent']}\t{limits['cpu_total_percent']}\n")
 
     def get_tool_version_info(self, tool_name: str, tool_config: Dict[str, Any]) -> tuple[str, str, str]:
         """Extract version logic from log_tool_version for reuse."""
@@ -1026,7 +1053,6 @@ class PipelineRunner:
         version, tool_path, database = self.get_tool_version_info(tool_name, tool_config)
         with open(self.versions_file, 'a') as f:
             f.write(f"{tool_name}\t{version}\t{tool_path}\t{database}\n")
-        self.log(f"  Logged: {tool_name}\t{version}\t{tool_path}\t{database}")
         
         # Log sub-tools if defined
         for sub_tool in tool_config.get('sub_tools', []):
@@ -1040,7 +1066,6 @@ class PipelineRunner:
             version, tool_path, database = self.get_tool_version_info(sub_tool['name'], sub_config)
             with open(self.versions_file, 'a') as f:
                 f.write(f"{sub_name}\t{version}\t{tool_path}\t{database}\n")
-            self.log(f"  Logged: {sub_name}\t{version}\t{tool_path}\t{database}")
     
     def _validate_config(self):
         """Validate required configuration settings."""
@@ -1065,6 +1090,7 @@ def main():
     parser.add_argument('--tools', nargs='+', help='Tools to run')
     parser.add_argument('--tool_versions', action='store_true', help='Show tool versions only')
     parser.add_argument('--monitor', action='store_true', default=True, help='Monitor resource usage (default: enabled)')
+    parser.add_argument('--verbose', action='store_true', help='Print commands to console')
     parser.add_argument('-v', '--version', action='version', version=f'%(prog)s {VERSION}', help='Show program version')
     
     args = parser.parse_args()
@@ -1106,7 +1132,8 @@ def main():
         force=args.force,
         skip_missing=args.skip,
         clean=args.clean,
-        monitor=args.monitor
+        monitor=args.monitor,
+        verbose=args.verbose
     )
     
     run.run_pipeline(args.tools)
