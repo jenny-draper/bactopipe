@@ -143,12 +143,12 @@ tools:
 
 
   plasmidfinder:
-    description: "PlasmidFinder plasmid identification"
-    version_cmd: "echo 'plasmidfinder 2.1.6'"
-    db_cmd: "grep '^PLASMIDFINDER_SHARE=' {tool_path} | cut -d'=' -f2 | tr -d '\"'"
-    tool_path: "/opt/conda/envs/plasmidfinder_2.1.6/bin/plasmidfinder.py"
+    description: "PlasmidFinder plasmid identification" 
+    version_cmd: "python -m plasmidfinder -v"
+    tool_path_cmd: "python -c 'import plasmidfinder, os; print(os.path.dirname(plasmidfinder.__file__))'"
+    db_path: "/data2/db/plasmidfinder_db_v2.2.0"
     modules:
-      - plasmidfinder/2.1.6
+      - plasmidfinder/3.0.1
     execution_mode: per_sample
     parallel: 20
     output_dir: "{rundir}/plasmidfinder"
@@ -158,9 +158,10 @@ tools:
     required_files:
       - "{assembly_file}"
     command: |
-      python {tool_path} -x \
+      python -m plasmidfinder -x --legacy \
+        -p {db_path} \
         -i {assembly_file} \
-        -o {rundir}/plasmidfinder/{sample_id}
+        -o {rundir}/plasmidfinder/{sample_id}/
     post_commands:
       # Cleanup & create merged plasmidfinder results with sample IDs
       - "rm -rf {rundir}/plasmidfinder/*/tmp"

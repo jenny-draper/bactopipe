@@ -243,8 +243,8 @@ class PipelineRunner:
         
         return result
 
-    def run_command(self, command: str, sample_id: str = None, log_file: Path = None, context: str = None) -> Tuple[float, float, float]:
-        """Execute shell command and return resource usage."""
+    def run_command(self, command: str, sample_id: str = None, log_file: Path = None, context: str = None) -> Tuple[float, float, float, int]:
+        """Execute shell command and return resource usage plus return code."""
         full_command = self.substitute_variables(command, sample_id)
         
         # Add sample prefix if this is a per-sample command
@@ -270,7 +270,7 @@ class PipelineRunner:
         self.write_to_file(log_msg, target_log_file)
         
         if self.dry_run:
-            return 0.0, 0.0, 0.0
+            return 0.0, 0.0, 0.0, 0
         
         # Initialize tracking variables
         time_stats_path = None
@@ -335,7 +335,7 @@ class PipelineRunner:
                 except Exception:
                     pass  # Ignore cleanup errors
         
-        return peak_memory_gb, cpu_cores, user_time
+        return peak_memory_gb, cpu_cores, user_time, result.returncode
 
     def setup_tool_logging(self, tool_name, run_dir):
         """Set up logging for tool-level operations (pre/post commands)"""
@@ -361,6 +361,10 @@ class PipelineRunner:
     def process_sample(self, tool_name: str, tool_config: Dict[str, Any], sample_id: str) -> Tuple[str, float, float, float]:
         """Execute tool on a single sample and return result with resource usage."""
         sample_log_file = None
+        
+        # Check if this sample is allowed to fail
+        allow_failed_sample_ids = self.config.get('settings', {}).get('allow_failed_sample_ids', [])
+        is_allowed_to_fail = sample_id in allow_failed_sample_ids
         
         try:
             # Check existing output first, before creating directories
@@ -402,7 +406,18 @@ class PipelineRunner:
             
             # Execute command
             command = self.substitute_variables(tool_config['command'], sample_id, tool_config)
-            peak_memory_gb, cpu_cores, user_time = self.run_command(command, sample_id=sample_id, log_file=sample_log_file, context=f"{tool_name} command")
+            peak_memory_gb, cpu_cores, user_time, returncode = self.run_command(command, sample_id=sample_id, log_file=sample_log_file, context=f"{tool_name} command")
+            
+            # Check if command failed (unless sample is allowed to fail)
+            if returncode != 0:
+                if is_allowed_to_fail:
+                    warning_msg = f"{sample_id}: Allowed failure (exit code {returncode})"
+                    self.log(warning_msg, sample_log=sample_log_file)
+                    return f"{sample_id}: allowed failure", 0.0, 0.0, 0.0
+                else:
+                    error_msg = f"{sample_id}: Failed with exit code {returncode}"
+                    self.log(error_msg, sample_log=sample_log_file)
+                    return f"{sample_id}: failed", 0.0, 0.0, 0.0
             
             # Calculate runtime and format completion message
             runtime = time.time() - start_time
@@ -524,12 +539,14 @@ class PipelineRunner:
         """Execute tool commands and collect resource metrics."""
         memory_values = []
         cpu_values = []
+        failed_samples = []
         
         def collect_metrics(cmd, context=None):
-            mem, cpu, _ = self.run_command(cmd, context=context)
+            mem, cpu, _, returncode = self.run_command(cmd, context=context)
             if self.monitor and mem > 0:
                 memory_values.append(mem)
                 cpu_values.append(cpu)
+            return returncode
         
         # Pre-commands (don't collect metrics for resource tracking)
         for cmd in tool_config.get('pre_commands', []):
@@ -543,13 +560,22 @@ class PipelineRunner:
             with ThreadPoolExecutor(max_workers=max_threads) as executor:
                 futures = {executor.submit(self.process_sample, tool_name, tool_config, sid): sid for sid in sample_ids}
                 for future in as_completed(futures):
-                    _, mem, cpu, _ = future.result()
-                    if self.monitor and mem > 0:
+                    result, mem, cpu, _ = future.result()
+                    # Check if sample failed (but not allowed failures)
+                    if "failed" in result and "allowed failure" not in result:
+                        failed_samples.append(futures[future])
+                    elif self.monitor and mem > 0:
                         memory_values.append(mem)
                         cpu_values.append(cpu)
+            
+            # Raise error if any samples failed (excluding allowed failures)
+            if failed_samples:
+                raise RuntimeError(f"{len(failed_samples)} sample(s) failed: {', '.join(failed_samples[:5])}")
         else:
             # Batch mode - collect metrics from main command only
-            collect_metrics(self.substitute_variables(tool_config['command'], tool_config=tool_config), f"{tool_name} main command")
+            returncode = collect_metrics(self.substitute_variables(tool_config['command'], tool_config=tool_config), f"{tool_name} main command")
+            if returncode != 0:
+                raise RuntimeError(f"{tool_name} command failed with exit code {returncode}")
         
         # Post-commands (don't collect metrics for resource tracking)
         for cmd in tool_config.get('post_commands', []):
@@ -1012,9 +1038,18 @@ class PipelineRunner:
                 if output:
                     version = output.split('\n')[0]
             
-            # Get tool path - use tool_path from config if available, otherwise which
+            # Get tool path - use tool_path from config if available, then tool_path_cmd, otherwise which
             if 'tool_path' in tool_config:
                 tool_path = self.substitute_variables(tool_config['tool_path'], tool_config=tool_config)
+            elif 'tool_path_cmd' in tool_config:
+                path_cmd = self.substitute_variables(tool_config['tool_path_cmd'], tool_config=tool_config)
+                if modules:
+                    module_setup = " && ".join(["module purge"] + [f"module load {m}" for m in modules])
+                    path_cmd = f". /etc/profile.d/modules.sh; {module_setup} && {path_cmd}"
+                
+                result = subprocess.run(path_cmd, shell=True, executable='/bin/bash', capture_output=True, text=True, timeout=DEFAULTS['subprocess_timeout'])
+                if result.returncode == 0:
+                    tool_path = result.stdout.strip()
             else:
                 path_cmd = f"which {tool_name}"
                 if modules:
