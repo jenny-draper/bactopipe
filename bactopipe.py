@@ -512,7 +512,7 @@ class PipelineRunner:
             
             # Start execution
             start_time = time.time()
-            self.log(f"Start: {self.get_timestamp()}")
+            self.log(f"{tool_name} Start: {self.get_timestamp()}")
             
             self.current_tool_modules = tool_config.get('modules', [])
             
@@ -530,7 +530,7 @@ class PipelineRunner:
             self.log(f"✅ {tool_name} completed successfully")
             
             runtime = time.time() - start_time
-            self.log(f"End: {self.get_timestamp()}")
+            self.log(f"{tool_name} End: {self.get_timestamp()} | Total run time: {self.format_runtime(runtime)}")
             
             self._report_resource_usage(tool_name, execution_mode, runtime, memory_values, cpu_values)
         # self.current_log_file automatically cleared here by context manager
@@ -564,7 +564,8 @@ class PipelineRunner:
                     # Check if sample failed (but not allowed failures)
                     if "failed" in result and "allowed failure" not in result:
                         failed_samples.append(futures[future])
-                    elif self.monitor and mem > 0:
+                    # Collect metrics from all non-skipped runs (including allowed failures that succeeded)
+                    elif self.monitor and mem > 0 and "skipped" not in result:
                         memory_values.append(mem)
                         cpu_values.append(cpu)
             
@@ -662,10 +663,10 @@ class PipelineRunner:
                 'runtime_seconds': runtime
             }
             
-            self.log(f"Runtime: {self.format_runtime(runtime)} | Peak Memory: {stats['max_memory_gb']:.2f} GB | CPU: {stats['max_cpu_cores']:.1f} cores")
+            self.log(f"{tool_name} Runtime: {self.format_runtime(runtime)} | Peak Memory: {stats['max_memory_gb']:.2f} GB | CPU: {stats['max_cpu_cores']:.1f} cores")
             self.resource_data.append(stats)
         else:
-            self.log(f"Runtime: {self.format_runtime(runtime)}")
+            self.log(f"{tool_name} Runtime: {self.format_runtime(runtime)}")
 
     def format_runtime(self, seconds: float) -> str:
         """Format runtime in human-readable format."""
