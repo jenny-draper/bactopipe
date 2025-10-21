@@ -245,6 +245,7 @@ tools:
             awk -v id="$id" 'NR>1 { gsub(",", "\t"); print id "\t" $0 }' "$resfile" >> {rundir}/padloc/padloc_summary.tsv
           else
             echo "WARNING: no padloc result found for $id" >&2 &&
+            touch ${resfile} &&
             echo -e "$id\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t" >> {rundir}/padloc/padloc_summary.tsv
           fi
         done
@@ -287,5 +288,4 @@ dependencies:
   checkm: [medaka]
   padloc: [prokka]
   parse_plasmids: [plasmidfinder]
-  summarise: [prokka, abritamr, mlst, plasmidfinder, checkm, padloc]
-  summarise: [prokka, abritamr, mlst, plasmidfinder, checkm, padloc]
+  summarise: [prokka, abritamr, mlst, plasmidfinder, checkm]
