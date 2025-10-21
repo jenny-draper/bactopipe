@@ -123,7 +123,7 @@ tools:
       sample_n=$(wc -l {rundir}/abritamr/abritamr_input.tsv | cut -d' ' -f1) &&
       abritamr run --contigs {rundir}/abritamr/abritamr_input.tsv --jobs $sample_n
     post_commands:   # delete the meaningless update_db log files created by abritamr
-      - "find {rundir} -name update_abritamr_db.log -type f -empty -delete 2>/dev/null || true"
+      - sleep 45     # Give abritamr time to finish writing its annoying "update_db.log" files
 
   mlst:
     description: "Multi-locus sequence typing"
@@ -134,7 +134,7 @@ tools:
     output_dir: "{rundir}/mlst"
     output_file: "{rundir}/mlst/mlst.csv"
     command: |
-      assemblies="$(find {rundir}/assembly -name "*.fa" ! -name "*unpolished*" -type f)"
+      assemblies=`ls {rundir}/assembly/*.fa` &&
       mlst --csv --nopath \
         --blastdb {db_path}/blast/mlst.fa \
         --datadir {db_path}/pubmlst \
