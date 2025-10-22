@@ -10,7 +10,8 @@
 - [5. Pipeline Workflow](#5-pipeline-workflow)
 - [6. Expected Output Structure](#6-expected-output-structure)
 - [7. Installation and Dependencies](#7-installation-and-dependencies)
-- [8. Configuration Guide](#8-configuration-guide)
+- [8. YAML Configuration Guide](#8-yaml-configuration-guide)
+- [9. FAQ](#9-faq)
 
 ## 1. Overview
 
@@ -46,6 +47,9 @@ python3 bactopipe.py -r RUNID --force --clean
 
 # Run specific tools only
 ./bactopipe.py -r RUN_ID --tools assembly prokka
+
+# Re-run the mlst, summary file generation, and post-run cleanup steps
+./bactopipe.py -r RUN_ID --tools mlst summarise cleanup --force
 
 # Direct input/output mode (no run ID)
 ./bactopipe.py -i samples.tsv -o output_dir/
@@ -299,7 +303,7 @@ Environment modules are a Linux system for dynamically loading different version
    python3 bactopipe.py -r TEST_RUN --dry-run
    ```
 
-## 8. Configuration Guide
+## 8. YAML Configuration Guide
 
 The pipeline is controlled by `bactopipe_config.yaml`. Each tool is defined with specific parameters controlling execution mode, parallelism, and dependencies.
 

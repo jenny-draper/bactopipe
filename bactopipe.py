@@ -87,6 +87,7 @@ class PipelineRunner:
         self.resource_data = []
         self.system_resources = self.get_system_resources()
         self.executed_tools = []  # Track which tools actually ran
+        self.pipeline_start_time = None  # Track pipeline start time
 
     def get_timestamp(self) -> str:
         """Get current timestamp in standard format."""
@@ -135,6 +136,7 @@ class PipelineRunner:
 
     def print_startup_info(self):
         """Print startup banner with key information."""
+        self.pipeline_start_time = time.time()
         pipeline_name = self.config.get('settings', {}).get('pipeline_name', 'Pipeline')
         self.log("=" * 60)
         self.log(f"BactoPipe v{VERSION}: {pipeline_name}")
@@ -147,8 +149,33 @@ class PipelineRunner:
         
         if self.monitor:
             cpu_info = self._format_cpu_info()
-            mem_info = f"{self.system_resources['memory_gb']} GB RAM" if self.system_resources['memory_gb'] != 'unknown' else "RAM: unknown"
-            self.log(f"Available System Resources: {cpu_info}, {mem_info}")
+            
+            # Format memory information
+            mem_total = self.system_resources.get('memory_gb', 'unknown')
+            mem_used = self.system_resources.get('memory_used_gb', 'unknown')
+            
+            mem_info = f"{mem_total} GB RAM" if mem_total != 'unknown' else "RAM: unknown"
+            
+            # System Resources line (capacity)
+            self.log(f"System Resources: {cpu_info}, {mem_info}")
+            
+            # System Current Load line (memory usage and 5-min CPU load average)
+            load_5 = self.system_resources.get('cpu_load_5min', 'unknown')
+            logical_cores = self.system_resources.get('logical_cores', 'unknown')
+            
+            usage_parts = []
+            if mem_total != 'unknown' and mem_used != 'unknown':
+                mem_percent = round((mem_used / mem_total) * 100, 1)
+                usage_parts.append(f"Memory: {mem_used}/{mem_total} GB ({mem_percent}%)")
+            
+            if load_5 != 'unknown' and logical_cores != 'unknown':
+                load_percent_5 = round((load_5 / logical_cores) * 100, 1)
+                usage_parts.append(f"CPU (5min avg): {load_5} ({load_percent_5}%)")
+            elif load_5 != 'unknown':
+                usage_parts.append(f"CPU (5min avg): {load_5}")
+            
+            if usage_parts:
+                self.log(f"System Current Load: {', '.join(usage_parts)}")
         
         settings = []
         if self.dry_run: settings.append("DRY RUN")
@@ -530,7 +557,7 @@ class PipelineRunner:
             self.log(f"✅ {tool_name} completed successfully")
             
             runtime = time.time() - start_time
-            self.log(f"{tool_name} End: {self.get_timestamp()} | Total run time: {self.format_runtime(runtime)}")
+            self.log(f"{tool_name} End | Total run time: {self.format_runtime(runtime)}")
             
             self._report_resource_usage(tool_name, execution_mode, runtime, memory_values, cpu_values)
         # self.current_log_file automatically cleared here by context manager
@@ -800,7 +827,9 @@ class PipelineRunner:
 
     def get_system_resources(self) -> Dict[str, Any]:
         """Query system resources and return available CPU cores and memory."""
-        resources = {'cpu_cores': 'unknown', 'logical_cores': 'unknown', 'memory_gb': 'unknown'}
+        resources = {'cpu_cores': 'unknown', 'logical_cores': 'unknown', 'memory_gb': 'unknown', 
+                     'memory_used_gb': 'unknown', 'memory_free_gb': 'unknown', 
+                     'cpu_load_5min': 'unknown'}
 
         try:
             # Get logical cores from nproc
@@ -822,13 +851,26 @@ class PipelineRunner:
                 else:
                     resources['cpu_cores'] = resources['logical_cores']
             
-            # Get memory info
+            # Get memory info (total, used, free)
             result = subprocess.run(['free', '-b'], capture_output=True, text=True)
             if result.returncode == 0:
                 for line in result.stdout.split('\n'):
                     if line.startswith('Mem:'):
-                        resources['memory_gb'] = round(int(line.split()[1]) / (1024**3), 1)
+                        parts = line.split()
+                        resources['memory_gb'] = round(int(parts[1]) / (1024**3), 1)
+                        resources['memory_used_gb'] = round(int(parts[2]) / (1024**3), 1)
+                        resources['memory_free_gb'] = round(int(parts[3]) / (1024**3), 1)
                         break
+            
+            # Get 5-minute CPU load average
+            result = subprocess.run(['uptime'], capture_output=True, text=True)
+            if result.returncode == 0:
+                # uptime output: "... load average: 1.23, 4.56, 7.89"
+                if 'load average:' in result.stdout:
+                    load_str = result.stdout.split('load average:')[1].strip()
+                    loads = [float(x.strip()) for x in load_str.split(',')]
+                    if len(loads) >= 2:
+                        resources['cpu_load_5min'] = loads[1]  # Second value is 5-min average
         except Exception:
             pass  # Keep unknown values
         
@@ -976,10 +1018,14 @@ class PipelineRunner:
         if self.monitor:
             self.log(f"Resource usage written to: {self.resource_file}")
         
+        # Calculate total pipeline runtime
+        total_runtime = time.time() - self.pipeline_start_time
+        
         # Summary
         tools_summary = f"specified tools ({', '.join(tools_to_run)})" if tools else "all tools"
         self.log("\n" + "=" * 50)
         self.log(f"Pipeline completed for {self.runid} - {tools_summary}")
+        self.log(f"Total runtime: {self.format_runtime(total_runtime)}")
         self.log(f"Timestamp: {self.get_timestamp()}")
         self.log("=" * 50)
 
@@ -1147,6 +1193,18 @@ def main():
         for tool_name, tool_config in config['tools'].items():
             version, path, db = runner.get_tool_version_info(tool_name, tool_config)
             print(f"{tool_name}\t{version}\t{path}\t{db}")
+            
+            # Check for sub-tools
+            for sub_tool in tool_config.get('sub_tools', []):
+                sub_name = f"{tool_name}:{sub_tool['name']}"
+                # Create sub-tool config: inherit modules, only include other keys if they have values
+                sub_config = {
+                    'modules': tool_config.get('modules', []),
+                    **{k: v for k, v in sub_tool.items() if k != 'name' and v is not None} 
+                }
+                
+                version, path, db = runner.get_tool_version_info(sub_tool['name'], sub_config)
+                print(f"{sub_name}\t{version}\t{path}\t{db}")
         return
     
     if args.runid and (args.input or args.output):
