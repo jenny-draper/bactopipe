@@ -21,7 +21,7 @@ settings:
   default_sample_file: "{rundir}/samples.tsv"
   default_assembly_path: "{rundir}/assembly/{sample_id}.fa"
   sample_id_column: "SAMPLE_ID"  # Column name containing sample IDs
-  version: 1.1
+  version: 1.2
   # Note that {script_dir} is auto-defined as the directory containing bactopipe.py
 
 # Setup commands for new runs when using runid (-r) mode
