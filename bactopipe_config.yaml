@@ -87,7 +87,7 @@ tools:
 
   prokka:
     description: "Prokka annotation of assembly"
-    db_cmd: "prokka --listdb 2>&1 | head -1 | grep -o '/[l^[:space:]]*'"
+    db_cmd: "prokka --listdb 2>&1 | head -1 | cut -d' ' -f6"
     modules:
       - prokka
     execution_mode: per_sample
@@ -104,9 +104,11 @@ tools:
 
   abritamr:
     description: "ABRicate antimicrobial resistance analysis"
-    db_cmd: "grep 'Checking for amrfinder DB:' {output_dir}/abritamr.log | head -1 | sed 's/.*DB: \\([^ ]*\\) and.*/\\1/'"
+    db_cmd: "abridir=$(which abritamr) && ls -d ${abridir%/bin/abritamr}/lib/python*/site-packages/abritamr/db/amrfinderplus/data/2* | head -1"
     modules:
-      - abritamr/1.0.17
+      - abritamr/1.0.18    
+    sub_tools:
+      - name: amrfinder
     execution_mode: batch
     output_dir: "{rundir}/abritamr"
     output_file: "{rundir}/abritamr/abritamr.txt"
