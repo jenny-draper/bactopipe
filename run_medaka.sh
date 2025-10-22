@@ -83,7 +83,12 @@ done
 # Get the actual descriptive filename by following the symlink
 actual_assembly=$(readlink -f "$assembly")
 unpolished_basename=$(basename "$actual_assembly")
-final_polished="${medaka_dir}/${unpolished_basename/-unpolished/-polished}"
+
+# Create polished filename: replace .fa with -polished.fa
+# This works regardless of whether the file has -unpolished in the name or not
+final_polished="${medaka_dir}/${unpolished_basename%.fa}-polished.fa"
+
+echo "Creating polished assembly: $final_polished"
 
 python3 -c "
 import re
@@ -106,6 +111,8 @@ if [ ! -f "$final_polished" ]; then
     echo "❌ ERROR: Final polished assembly was NOT created: $final_polished"
     exit 1
 fi
+
+echo "✅ Polished assembly created: $final_polished"
 
 # Create final output link
 ln -sf "$final_polished" "$final_output"

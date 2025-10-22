@@ -126,13 +126,13 @@ if [ -n "${best_assembly:-}" ] && [ -f "$best_assembly" ]; then
     assembly_method=$(basename "$best_assembly" .fa)
     assembly_method="${assembly_method#${SAMPLE_ID}.}"
     
-    # Replace assembly method strings and join with hyphens
+    # Replace assembly method strings and standardize to hyphen-separated format
     assembly_method="${assembly_method//dragonflye_auto/autocycler}"
     assembly_method="${assembly_method//reoriented/reori}"
-    assembly_method="${assembly_method//dragoneflye/dragonflye}"
-    assembly_method="${assembly_method//./-}"  # Replace dots with hyphens
+    assembly_method="${assembly_method//dragonflye/dragonflye}"
+    assembly_method="${assembly_method//./-}"  # Replace all dots with hyphens
     
-    # Create descriptive link name only
+    # Create descriptive link name
     final_link="${ASSEMBLYDIR}/unpolished_best/${SAMPLE_ID}.${assembly_method}-unpolished.fa"
     
     ln -sf "$best_assembly" "$final_link"
