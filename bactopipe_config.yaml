@@ -168,7 +168,7 @@ tools:
       # Cleanup & create merged plasmidfinder results with sample IDs
       - "rm -rf {rundir}/plasmidfinder/*/tmp"
       - |
-        echo -e "Sample\tPlasmid\tIdentity\tQuery/Template length\tContig\tPosition in contig\tNote\tAccession number" \
+        echo -e "Sample\t\Database\tPlasmid\tIdentity\tQuery/Template length\tContig\tPosition in contig\tNote\tAccession number" \
           > {rundir}/plasmidfinder/plasmidfinder_results.tsv
         tail -n +2 {rundir}/samples.tsv | cut -f2 | while read id; do
           resfile="{rundir}/plasmidfinder/$id/results_tab.tsv"
