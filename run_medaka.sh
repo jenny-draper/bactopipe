@@ -43,13 +43,26 @@ mkdir -p "$medaka_dir"
 
 
 # Determine Medaka model for this run. Attempt to get from run QC data, else use default
-MEDAKA_MODEL=$(awk -F'\t' '$1=="Basecaller Model String" {print $2}' "/data/runs/ont/qc/${RUNID}/${RUNID}.ont_versions.tsv" 2>/dev/null)
-if [ -z "$MEDAKA_MODEL" ] || ! medaka tools list_models 2>/dev/null | grep -q "^${MEDAKA_MODEL}$"; then
-    [ -n "$MEDAKA_MODEL" ] && echo "WARNING: model $MEDAKA_MODEL isn't valid, using default: $DEFAULT_MEDAKA_MODEL" >&2
-    [ -z "$MEDAKA_MODEL" ] && echo "⚠️ Could not determine Medaka model for run $RUNID, using default: $DEFAULT_MEDAKA_MODEL"
+QC_VERSIONS_FILE="/data/runs/ont/qc/${RUNID}/${RUNID}.ont_versions.tsv"
+
+if [ ! -f "$QC_VERSIONS_FILE" ]; then
+    echo "⚠️  WARNING: QC versions file not found: $QC_VERSIONS_FILE"
+    echo "⚠️  Using default Medaka model: $DEFAULT_MEDAKA_MODEL"
     MEDAKA_MODEL="$DEFAULT_MEDAKA_MODEL"
 else
-    echo "✅ Found valid Medaka model: $MEDAKA_MODEL"
+    MEDAKA_MODEL=$(awk -F'\t' '$1=="Basecaller Model String" {print $2}' "$QC_VERSIONS_FILE" 2>/dev/null || true)
+    
+    if [ -z "$MEDAKA_MODEL" ]; then
+        echo "⚠️  WARNING: QC versions file exists but doesn't contain 'Basecaller Model String'"
+        echo "⚠️  Using default Medaka model: $DEFAULT_MEDAKA_MODEL"
+        MEDAKA_MODEL="$DEFAULT_MEDAKA_MODEL"
+    elif ! (medaka tools list_models 2>/dev/null | grep -q "^${MEDAKA_MODEL}$"); then
+        echo "⚠️  WARNING: Found model '$MEDAKA_MODEL' but it's not valid for this medaka installation"
+        echo "⚠️  Using default Medaka model: $DEFAULT_MEDAKA_MODEL"
+        MEDAKA_MODEL="$DEFAULT_MEDAKA_MODEL"
+    else
+        echo "✅ Found valid Medaka model: $MEDAKA_MODEL"
+    fi
 fi
 
 echo "▶️ Running Medaka polishing (${MEDAKA_ROUNDS} rounds) with model: $MEDAKA_MODEL"
