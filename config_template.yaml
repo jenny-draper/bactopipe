@@ -1,0 +1,96 @@
+# BactoPipe YAML Pipeline Configuration Template
+# Reference template showing available configuration options
+# R: = Required, O: = Optional
+
+# Available substitution variables throughout this config:
+# {rundir}      - Output directory set by --output-dir (e.g., /path/to/demo/qc)
+# {runid}       - Run ID if explicitly provided via --runid, otherwise empty string
+# {input_dir}   - Input directory set by --input-dir (if provided)
+# {script_dir}  - Directory containing this config file (or set in settings below)
+# {sample_id}   - Current sample ID (per_sample mode only)
+# Custom vars   - Any setting defined below becomes {variable_name}
+
+settings:
+  # Pipeline metadata
+  pipeline_name: "Pipeline Name"  # O: Displayed in startup banner
+  version: 1.0  # O: Config version for tracking
+  
+  # Execution behavior
+  default_execution_mode: per_sample  # O: Options: per_sample, batch
+  default_parallel: 4  # O: Default parallelism for tools
+  
+  # Sample management
+  sample_id_column: "SAMPLE_ID"  # O: Column name in input file with sample ids (default: SAMPLE_ID)
+  allow_failed_sample_ids: [""]  # O: Samples that can fail without stopping pipeline
+  
+  # Path definitions
+  script_dir: "/path/to/scripts"  # O: Automatic default: directory containing config file
+  default_sample_file: "{rundir}/samples.tsv"  # O: Default samples file location
+  default_assembly_path: "{rundir}/assembly/{sample_id}.fa"  # O: Makes {assembly_file} available
+  
+  # Custom variables (any setting becomes {variable_name} in commands)
+  # custom_db: "/path/to/database"  # O: Custom variables
+  # reference_genome: "/path/to/reference.fa"  # O: Custom variables
+
+  
+  # Available substitution variables:
+  # {rundir}      - Set by --output-dir argument (e.g., demo/qc)
+  # {runid}       - Basename of rundir (e.g., 'qc' from demo/qc)
+  # {input_dir}   - Set by --input-dir argument if provided
+  # {script_dir}  - Directory containing this config file (or override in settings)
+  # {sample_id}   - Current sample ID (per_sample mode only)
+  # Custom vars   - Any setting defined above becomes {variable_name}
+
+
+# Pipeline-level commands
+setup_commands:  # O: Run once before any tools
+  # - "mkdir -p {rundir}/logs"
+  # - "cp {input_dir}/metadata.tsv {rundir}/"
+
+cleanup_commands:  # O: Run once after all tools complete
+  # - "rm -rf {rundir}/temp"
+  # - "find {rundir} -name '*.tmp' -delete"
+
+# Tool definitions
+tools:  # R: At least one tool must be defined
+  tool_name_a:  # R: Unique tool name
+    # Core configuration
+    execution_mode: per_sample  # R: Options: per_sample or batch
+    command: "tool_a {sample_id} -o {sample_output_dir}"  # R: Command to execute
+    parallel: 10  # O: Parallelism for per_sample mode
+    modules: []  # O: HPC modules to load
+    
+    # Output tracking (enables skip-if-exists logic)
+    sample_output_dir: "{rundir}/tool_a/{sample_id}"  # O: Per-sample output directory
+    sample_output_file: "{rundir}/tool_a/{sample_id}/output.txt"  # O: File to check for skip
+    output_dir: "{rundir}/tool_a"  # O: Tool output directory
+    output_file: "{rundir}/tool_a_summary.tsv"  # O: Batch output file
+    
+    # Input validation
+    required_files:  # O: Check these exist before running
+      # - "{input_dir}/{sample_id}.fastq"
+      # - "{rundir}/reference.fa"
+    
+    # Tool-level commands
+    pre_commands: []  # O: Run once before main command
+    post_commands: []  # O: Run once after main command
+    
+    # Version tracking
+    version_cmd: "tool_a --version"  # O: How to get version
+    tool_path: "/usr/bin/tool_a"  # O: Static path or use tool_path_cmd
+    db_path: "/data/db/tool_a"  # O: Static path or use db_cmd
+    
+    # Sub-tools tracking
+    sub_tools:  # O: Track versions of sub-tools
+      # - name: subtool_name
+      #   version_cmd: "subtool --version"
+  
+  tool_name_b:  # Minimal batch example
+    execution_mode: batch  # R: Must specify execution mode
+    command: "tool_b --input {rundir}/tool_a --output {output_file}"  # R: Command
+    output_file: "{rundir}/tool_b/results.html"  # O: Output file
+
+# Tool execution order
+dependencies:  # O: Define execution order
+  tool_name_b: [tool_name_a]  # tool_b waits for tool_a
+  # tool_name_c: [tool_name_a, tool_name_b]  # Multiple dependencies

@@ -1,0 +1,25 @@
+species	taxid	genome_size
+Acinetobacter baumannii	470	3975000
+Citrobacter freundii	546	5250000
+Enterococcus faecalis	1351	2950000
+Escherichia coli	562	5150000
+Enterobacter cloacae	550	5100000
+Enterobacter cloacae complex	550	5100000
+[Enterobacter] aerogenes	548	5600000
+Klebsiella aerogenes	548	5600000
+Klebsiella oxytoca	571	5850000
+Klebsiella pneumoniae	573	5600000
+Klebsiella quasipneumoniae	1463165	5600000
+Klebsiella variicola	244366	5600000
+Morganella morganii	582	4800000
+Photobacterium leiognathi	553611	4741959
+Pseudomonas aeruginosa group	136841	6475000
+Pseudomonas aeruginosa	287	6475000
+Pseudomonas shirazica	1940636	5903125
+Proteus mirabilis	584	4750000
+Providencia stuartii	588	4750000
+Salmonella enterica	28901	5050000
+Serratia marcescens	615	5200000
+Staphylococcus aureus	1280	2800000
+Staphylococcus xylosus	1288	2820205
+Xanthomonas campestris	339	5012521

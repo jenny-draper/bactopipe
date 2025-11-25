@@ -1,0 +1,24 @@
+# BactoPipe: QC Pipeline
+
+settings:
+  pipeline_name: "Demo minimal QC Pipeline"  
+  version: 1.0
+
+tools:
+  fastqc:
+    execution_mode: per_sample
+    parallel: 20
+    #modules: [fastqc]
+    output_dir: "{rundir}/fastqc"
+    sample_output_dir: "{rundir}/fastqc/{sample_id}"
+    sample_output_file: "{rundir}/fastqc/{sample_id}/{sample_id}*_fastqc.html"  
+    command: "fastqc -o {sample_output_dir} {input_dir}/{sample_id}*.fastq.gz"
+
+  multiqc:
+    execution_mode: batch
+    #modules: [multiqc]
+    output_file: "{rundir}/multiqc_report.html" # if this exists already, skip
+    command: "multiqc {rundir}/fastqc -o {rundir}"
+
+dependencies:
+  multiqc: [fastqc]

@@ -1,0 +1,199 @@
+# AMR_QC Configuration File
+# ==============================================================================================
+# 
+# This YAML configuration file defines the Illumina QC workflow for bacterial genomic data.
+# It specifies tool parameters, commands, execution modes, dependencies, and resource settings
+# for processing Illumina paired-end sequencing data through QC, trimming, and organism identification.
+#
+# Used by: bactopipe.py (main pipeline runner)
+# Purpose: Configurable Illumina QC workflow for bacterial samples
+# Author: Jenny L Draper
+# Date: November 2025
+
+
+# Global settings
+settings:
+  pipeline_name: "QC Pipeline for Bacterial Illumina Data"
+  script_dir: "/data/projects/pipelines/dev/jennyd/agar_illumina/qc"  # Directory containing pipeline scripts
+  default_parallel: 10
+  default_execution_mode: per_sample
+  allow_failed_sample_ids: []
+  default_sample_file: "{rundir}/samples.tsv"
+  sample_id_column: "SAMPLE_ID"
+  version: 1.0
+  # Note that {script_dir} is auto-defined as the directory containing bactopipe.py
+
+# Commands to run at begining & end of the pipeline
+setup_commands:
+  - "mkdir -p {rundir}/logs"  # ensure dirs exist
+cleanup_commands:
+  - "find {rundir} -name '*.timer.tmp' -delete 2>/dev/null || true"
+
+# Define the tools and commands for the pipeline!
+tools:
+
+  prep_samplefile:
+    description: "Create samples.tsv and concatenate raw FASTQ files from {input_dir}"
+    execution_mode: batch
+    output_file: "{rundir}/samples.tsv"
+    command: |
+      echo "SAMPLE_ID" > {rundir}/samples.tsv
+      for r1 in {input_dir}/*_R1.fastq.gz; do
+        sample=$(basename "$r1" | sed 's/_R1.fastq.gz$//')
+        echo "$sample" >> {rundir}/samples.tsv
+      done
+
+  concat_fastqs:
+    description: "Concatenate raw FASTQ files for each sample"
+    output_dir: "{rundir}/fastq"
+    sample_output_dir: "{rundir}/fastq/{sample_id}"
+    sample_output_file: "{rundir}/fastq/{sample_id}/{sample_id}_R1.fq.gz"
+    command: |
+      cat {input_dir}/{sample_id}*_R1.fastq.gz > {rundir}/fastq/{sample_id}/{sample_id}_R1.fq.gz
+      cat {input_dir}/{sample_id}*_R2.fastq.gz > {rundir}/fastq/{sample_id}/{sample_id}_R2.fq.gz
+
+  trim:
+    description: "Quality and adapter trimming with Trimmomatic"
+    modules:
+      - shovill
+    version_cmd: "echo trimmomatic `trimmomatic -version`"
+    tool_path_cmd: "which trimmomatic"
+    sample_output_dir: "{rundir}/fastq/{sample_id}"
+    sample_output_file: "{rundir}/fastq/{sample_id}/{sample_id}_trimmed.paired_R1.fq.gz"
+    required_files:
+      - "{rundir}/fastq/{sample_id}/{sample_id}_R1.fq.gz"
+    command: |
+      trimmomatic PE -threads 8 -phred33 \
+        {rundir}/fastq/{sample_id}/{sample_id}_R1.fq.gz \
+        {rundir}/fastq/{sample_id}/{sample_id}_R2.fq.gz \
+        {rundir}/fastq/{sample_id}/{sample_id}_trimmed.paired_R1.fq.gz \
+        {rundir}/fastq/{sample_id}/{sample_id}_trimmed.unpaired_R1.fq.gz \
+        {rundir}/fastq/{sample_id}/{sample_id}_trimmed.paired_R2.fq.gz \
+        {rundir}/fastq/{sample_id}/{sample_id}_trimmed.unpaired_R2.fq.gz \
+        LEADING:3 TRAILING:3 SLIDINGWINDOW:4:20 MINLEN:100 \
+        ILLUMINACLIP:/opt/conda/envs/shovill_1.1.0/db/trimmomatic.fa:2:30:10
+
+  subsample:
+    description: "Subsample high-coverage samples to 2M read pairs max"
+    modules:
+      - seqtk
+    version_cmd: "echo seqtk `seqtk 2>&1 | grep Version | cut -d: -f2`"
+    tool_path_cmd: "which seqtk"
+    output_dir: "{rundir}"
+    sample_output_dir: "{rundir}/fastq/{sample_id}"
+    sample_output_file: "{rundir}/fastq/{sample_id}/{sample_id}_processed_R1.fq.gz"
+    required_files:
+      - "{rundir}/fastq/{sample_id}/{sample_id}_trimmed.paired_R1.fq.gz"
+    command: |
+      cd {rundir}/fastq/{sample_id} &&
+      readcount=$(($(zcat {sample_id}_trimmed.paired_R1.fq.gz | wc -l) / 4)) &&
+      if [ $readcount -gt 2000001 ]; then
+        seqtk sample -s100 {sample_id}_trimmed.paired_R1.fq.gz 2000000 | gzip > {sample_id}_trimmed.paired.subsampled_R1.fq.gz &&
+        seqtk sample -s100 {sample_id}_trimmed.paired_R2.fq.gz 2000000 | gzip > {sample_id}_trimmed.paired.subsampled_R2.fq.gz
+      fi
+    post_commands:
+      - |
+        # Create processed symlinks: use subsampled if exists, otherwise trimmed
+        tail -n +2 {rundir}/samples.tsv | cut -f1 | while read sample; do
+          sampledir="{rundir}/fastq/$sample"
+          if [ -f "$sampledir/${sample}_trimmed.paired.subsampled_R1.fq.gz" ]; then
+            ln -sf ${sample}_trimmed.paired.subsampled_R1.fq.gz "$sampledir/${sample}_processed_R1.fq.gz"
+            ln -sf ${sample}_trimmed.paired.subsampled_R2.fq.gz "$sampledir/${sample}_processed_R2.fq.gz"
+          else
+            ln -sf ${sample}_trimmed.paired_R1.fq.gz "$sampledir/${sample}_processed_R1.fq.gz"
+            ln -sf ${sample}_trimmed.paired_R2.fq.gz "$sampledir/${sample}_processed_R2.fq.gz"
+          fi
+        done
+
+  fastqc:
+    description: "FastQC quality assessment"
+    modules:
+      - fastqc
+    sample_output_dir: "{rundir}/fastqc/{sample_id}"
+    sample_output_file: "{rundir}/fastqc/{sample_id}/{sample_id}_processed_R1_fastqc.html"
+    required_files:
+      - "{rundir}/fastq/{sample_id}/{sample_id}_processed_R1.fq.gz"
+    command: |
+      fastqc --outdir {rundir}/fastqc/{sample_id} --extract \
+        {rundir}/fastq/{sample_id}/{sample_id}_processed_R1.fq.gz \
+        {rundir}/fastq/{sample_id}/{sample_id}_processed_R2.fq.gz
+
+  kraken2:
+    description: "Taxonomic classification with Kraken2"
+    modules:
+      - kraken2
+    version_cmd: "kraken2 --version | head -1"
+    db_cmd: "echo $KRAKEN2_DEFAULT_DB"
+    sample_output_dir: "{rundir}/kraken2/{sample_id}"
+    sample_output_file: "{rundir}/kraken2/{sample_id}/{sample_id}.kraken.report.txt"
+    required_files:
+      - "{rundir}/fastq/{sample_id}/{sample_id}_processed_R1.fq.gz"
+    command: |
+      kraken2 --paired --gzip-compressed --threads 10 \
+        --report {rundir}/kraken2/{sample_id}/{sample_id}.kraken.report.txt \
+        --output {rundir}/kraken2/{sample_id}/{sample_id}.kraken.output.txt \
+        {rundir}/fastq/{sample_id}/{sample_id}_processed_R1.fq.gz \
+        {rundir}/fastq/{sample_id}/{sample_id}_processed_R2.fq.gz \
+        > {rundir}/kraken2/{sample_id}/{sample_id}.kraken.log 2>&1
+
+  parse_species:
+    description: "Parse Kraken2 results and identify species with genome sizes"
+    tool_path: "{script_dir}/identify_species.py"
+    version_cmd: "python3 {tool_path} --version"
+    output_file: "{rundir}/kraken2/species_identified.tsv"
+    sample_output_dir: "{rundir}/kraken2/{sample_id}"
+    sample_output_file: "{rundir}/kraken2/{sample_id}/{sample_id}.species.tsv"
+    required_files:
+      - "{rundir}/kraken2/{sample_id}/{sample_id}.kraken.report.txt"
+    command: |
+      python3 {tool_path} \
+        --sample-id {sample_id} \
+        --report {rundir}/kraken2/{sample_id}/{sample_id}.kraken.report.txt \
+        --output {rundir}/kraken2/{sample_id}/{sample_id}.species.tsv \
+        --size-db {script_dir}/genome_size_db.tsv \
+        --rename-db {script_dir}/rename_species.tsv
+    post_commands:
+      - |
+        # Merge all per-sample species results into single file
+        head -1 $(ls {rundir}/kraken2/*/*.species.tsv | head -1) > {rundir}/kraken2/species_identified.tsv
+        tail -n +2 -q {rundir}/kraken2/*/*.species.tsv >> {rundir}/kraken2/species_identified.tsv
+
+  multiqc:
+    description: "Generate MultiQC report"
+    execution_mode: batch
+    modules:
+      - multiqc
+    version_cmd: "multiqc --version"
+    output_dir: "{rundir}/multiqc"
+    output_file: "{rundir}/multiqc/multiqc_report.html"
+    required_files:
+      - "{rundir}/samples.tsv"
+    command: |
+      # Use tool-specific search patterns to ensure correct parsing of kracken files
+      multiqc --force --outdir {output_dir} \
+        --file-list <(find {rundir}/fastqc -name "*_fastqc.zip"; \
+                      find {rundir}/kraken2 -name "*.kraken.report.txt"; \
+                      find {rundir}/fastq -name "*.log" 2>/dev/null | grep -E "trimmed|trim" || true)
+
+  summarise:
+    description: "Generate QC summary from MultiQC data and merge with species identification"
+    tool_path: "{script_dir}/generate_summary.py"
+    execution_mode: batch
+    version_cmd: "python3 {tool_path} --version"
+    output_file: "{rundir}/qc_summary.tsv"
+    required_files:
+      - "{rundir}/multiqc/multiqc_report.html"
+      - "{rundir}/kraken2/species_identified.tsv"
+    command: "python3 {tool_path} --path {rundir}"
+
+
+# Define tool dependencies
+dependencies:
+  concat_fastqs: [prep_samplefile]
+  trim: [concat_fastqs]
+  subsample: [trim]
+  fastqc: [subsample]
+  kraken2: [subsample]
+  parse_species: [kraken2]
+  multiqc: [fastqc, kraken2]
+  summarise: [multiqc, parse_species]
