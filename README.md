@@ -22,17 +22,18 @@ Think of it as a way to transform your collection of scripts and commands into a
 1. **Define your pipeline in human-readable YAML**, including bash commands, dependencies, and per-tool parallelism:
 
 ```yaml
+# my_pipeline.yaml
 tools:
   my_tool:
-    command: "my_tool {input_file} {output_dir}"
-    parallel: 4  # Run 4 samples from input file at once
-    output_file: "{output_dir}/result_file"
+    command: "my_tool {input_file} {output_dir}"                   # bash command to run tool
+    parallel: 4                                                    # run 4 samples from input file at once
+    sample_output_file: "{output_dir}/{sample_id}.result.txt"      # presence = successful run
 ```
 
 2. **The bactopipe.py runner handles execution**, standardising input/output handling and producing detailed, organised logs:
 
 ```bash
-python bactopipe.py -c pipeline.yaml -i input_file -o /path/to/output
+python bactopipe.py -c my_pipeline.yaml -i input_file -o /path/to/output
 ```
 
 ## Key Features
@@ -55,42 +56,22 @@ python bactopipe.py -c pipeline.yaml -i input_file -o /path/to/output
 - **Variable substitution**: Dynamic paths and parameters
 - **Multiple execution modes**: Batch processing or per-sample parallelism
 
-## Command-Line Options
-
-```bash
-# Process a run with default settings
-python bactopipe.py -c pipeline.yaml -i input_file -o /path/to/output
-python bactopipe.py -c pipeline.yaml --input-dir /path/to/raw -o /path/to/output
-
-# Resume from where you left off (automatically skips completed steps!)
-python bactopipe.py -c pipeline.yaml --input-dir /path/to/raw -o /path/to/output
-
-# Run specific tools only
-python bactopipe.py ... --tools kraken2 summarise
-
-# Force re-run 
-python bactopipe.py ... --force
-
-# Allow specific samples to fail without stopping pipeline
-python bactopipe.py ... --skip NEG,sample001
-
-# Preview commands without execution
-python bactopipe.py ... --dry-run
-
-# Show more detail in command-line output
-python bactopipe.py ... --verbose
-```
+### 🚀 Minimal Dependencies
+- **Lightweight requirements**: Just Python 3.8+ with PyYAML and pandas
+- **Built-in parallelization**: Uses Python's standard ThreadPoolExecutor
+- **Optional monitoring**: GNU time for resource tracking (auto-disables if not found)
+- **Environment flexibility**: Supports Linux modules, conda, or direct tool calls
 
 ## Demo
 
-The `/demo` directory contains a `demo.yaml` file defining a minimal QC pipeline (FastQC + MultiQC) to demonstrate the basic concept and features, along with small input sample files for quick testing.
+The `/demo` directory contains a `demo.yaml` file defining a complete minimal QC pipeline (FastQC + MultiQC) to demonstrate the basic concept and features, along with small input sample files for quick testing.
 
-**Note on dependencies:**
-- `bactopipe.py` requires Python 3.8+ with PyYAML and pandas installed
-- Running this demo assumes you already have FastQC and MultiQC installed and in your PATH. If your system uses linux environment modules, edit `demo/demo.yaml` and uncomment/edit the `#modules: [module_name]` lines appropriately.
+Given this `demo.yaml` file and the input/output file/directory paths to run on, `bactopipe.py `will run FastQC as described on 20 samples at a time, then run MulitQC to combine the results and generate a combined QC report. All of the output directory creation and structure, skip/resume/overwrite and logging features, etc are handled automatically by `bactopipe.py`!
+
+*Note: this demo assumes you already have FastQC and MultiQC installed and in your PATH. If your system uses linux environment modules, edit `demo/demo.yaml` and uncomment/edit the `#modules: [module_name]` lines appropriately to load your tool modules.*
+
 
 ### Demo YAML Config
-
 ```yaml
 # demo.yaml
 
@@ -182,7 +163,8 @@ Timestamp: 2025-11-12 13:57:17
 
 ```
 demo/qc/
-├── fastqc/               # FastQC logs & results per sample
+├── fastqc/               # FastQC run log & per-sample output
+│   └── sample01/         # FastQC output and log for sample01  
 ├── multiqc_data/         # MultiQC output report data
 ├── multiqc_report.html   # MultiQC output report
 ├── logs/                 # Logs for tools without specified output directories (e.g. MultiQC)
@@ -210,6 +192,32 @@ timestamp            tool                    version              path          
 2025-01-15 14:24:16  multiqc                multiqc, version 1.21 /opt/conda/bin/multiqc       none
 ```
 
+## Command-Line Options
+
+```bash
+# Process a run with default settings
+python bactopipe.py -c pipeline.yaml -i input_file -o /path/to/output
+python bactopipe.py -c pipeline.yaml --input-dir /path/to/raw -o /path/to/output
+
+# Resume from where you left off (automatically skips completed steps!)
+python bactopipe.py -c pipeline.yaml --input-dir /path/to/raw -o /path/to/output
+
+# Run specific tools only
+python bactopipe.py ... --tools kraken2 summarise
+
+# Force re-run 
+python bactopipe.py ... --force
+
+# Allow specific samples to fail without stopping pipeline
+python bactopipe.py ... --skip NEG,sample001
+
+# Preview commands without execution
+python bactopipe.py ... --dry-run
+
+# Show more detail in command-line output
+python bactopipe.py ... --verbose
+```
+
 
 ## Command Line Options Reference
 
@@ -233,8 +241,7 @@ See [`config_template.yaml`](config_template.yaml) for a complete reference of a
 ## Examples
 
 - **Demo QC pipeline**: [`demo/demo.yaml`](demo/demo.yaml) - Minimal FastQC + MultiQC example
-- **Illumina QC pipeline**: [`qc_illumina/amr_qc.yaml`](qc_illumina/amr_qc.yaml) - Full bacterial Illumina QC workflow example
-
+- **Illumina QC pipeline**: [`qc_illumina/qc_illumina.yaml`](qc_illumina/amr_qc.yaml) - a full bacterial Illumina QC pipeline including read trimming, subsampling, species identifcation, and run summary file generation using a combination of standard tools and custom scripts.
 
 
 ## Documentation
