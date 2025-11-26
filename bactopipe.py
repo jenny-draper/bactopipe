@@ -50,7 +50,7 @@ DEFAULTS = {
 class PipelineRunner:
     def __init__(self, config_file: str, input_file: str = None, input_dir: str = None, 
                  output_dir: str = None, runid: str = None, dry_run: bool = False, force: bool = False, skip_samples: str = None, 
-                 clean: bool = False, monitor: bool = True, verbose: bool = False):
+                 clean: bool = False, no_monitor: bool = False, verbose: bool = False):
     
         with open(config_file, 'r') as f:
             self.config = yaml.safe_load(f)
@@ -79,7 +79,8 @@ class PipelineRunner:
             # Default to directory containing the config file
             self.script_dir = Path(config_file).parent.absolute()
         
-        self.monitor = monitor
+        # Check if monitoring is available and requested
+        self.monitor = self._check_monitoring_available(no_monitor)
         
         # setup output directory and runid 
         if not output_dir:
@@ -115,6 +116,23 @@ class PipelineRunner:
         self.system_resources = self.get_system_resources()
         self.executed_tools = []  # Track which tools actually ran
         self.pipeline_start_time = None  # Track pipeline start time
+
+    def _check_monitoring_available(self, no_monitor: bool) -> bool:
+        """Check if resource monitoring is available and requested."""
+        if no_monitor:
+            return False
+        
+        # Check if GNU time is available
+        try:
+            result = subprocess.run(['/usr/bin/time', '--version'], 
+                                  capture_output=True, text=True, timeout=2)
+            if result.returncode == 0 and 'GNU' in result.stdout:
+                return True
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            pass
+        
+        print("Warning: GNU time not found at /usr/bin/time - disabling resource monitoring")
+        return False
 
     def get_timestamp(self) -> str:
         """Get current timestamp in standard format."""
@@ -1006,9 +1024,8 @@ class PipelineRunner:
             self.log(f"\n{'=' * 3} Logging tool versions {'=' * 37}")
             for tool_name in self.executed_tools:
                 self.log_tool_version(tool_name, self.config['tools'][tool_name])
+            self.log(f"Tool versions appended to: {self.versions_file}")
             
-            self.log(f"\nTool versions appended to: {self.versions_file}")
-        
         if self.monitor:
             self.log(f"Resource usage appended to: {self.resource_file}")
         
@@ -1184,7 +1201,7 @@ def main():
     parser.add_argument('--clean', action='store_true', help='Overwrite log files instead of appending')
     parser.add_argument('--tools', nargs='+', help='Tools to run')
     parser.add_argument('--tool_versions', action='store_true', help='Show tool versions only')
-    parser.add_argument('--monitor', action='store_true', default=True, help='Monitor resource usage (default: enabled)')
+    parser.add_argument('--no-monitor', action='store_true', help='Disable resource monitoring')
     parser.add_argument('--verbose', action='store_true', help='Print commands to console')
     parser.add_argument('-v', '--version', action='version', version=f'%(prog)s {VERSION}', help='Show program version')
     
@@ -1210,12 +1227,12 @@ def main():
         input_file=args.input_file,
         input_dir=args.input_dir,
         output_dir=args.output_dir,
-        runid=args.runid,  # Pass the runid argument
+        runid=args.runid,
         dry_run=args.dry_run,
         force=args.force,
         skip_samples=args.skip,
         clean=args.clean,
-        monitor=args.monitor,
+        no_monitor=args.no_monitor,
         verbose=args.verbose
     )
     
