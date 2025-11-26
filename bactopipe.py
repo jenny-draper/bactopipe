@@ -668,6 +668,7 @@ class PipelineRunner:
         versions_file = self.rundir / log_filename
         pipeline_path = Path(__file__).absolute()
         config_version = self.config.get('settings', {}).get('version', DEFAULTS['default_unknown_value'])
+        config_name = Path(self.config_file).name
         
         # Write header and initial entries if new file or clean mode
         if self.clean or not versions_file.exists():
@@ -675,7 +676,7 @@ class PipelineRunner:
             with open(versions_file, 'w') as f:
                 f.write("timestamp\ttool\tversion\tpath\tdatabase\n")
                 f.write(f"{timestamp}\tbactopipe.py\t{VERSION}\t{pipeline_path}\t{DEFAULTS['default_database_value']}\n")
-                f.write(f"{timestamp}\tbactopipe_config.yaml\t{config_version}\t{self.config_file}\t{DEFAULTS['default_database_value']}\n")
+                f.write(f"{timestamp}\t{config_name}\t{config_version}\t{self.config_file}\t{DEFAULTS['default_database_value']}\n")
 
         # Store the filename for later reference
         self.versions_file = versions_file
@@ -932,7 +933,7 @@ class PipelineRunner:
         # Calculate average CPU cores used (total CPU time / wall time)
         cpu_cores = (metrics['user_time'] + metrics['system_time']) / metrics['wall_time'] if metrics['wall_time'] > 0 else 0.0
         
-        return metrics['peak_memory_gb'], cpu_cores, metrics['user_time']
+        return metrics['peak_memory_gb'], cpu_ores, metrics['user_time']
 
     def setup_run_directory(self):
         """Execute setup commands."""
@@ -1167,7 +1168,7 @@ class PipelineRunner:
         timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         print(f"{timestamp}\tbactopipe.py\t{VERSION}\t{Path(__file__).absolute()}\tnone")
         config_version = config.get('settings', {}).get('version', 'unknown')
-        print(f"{timestamp}\tbactopipe_config.yaml\t{config_version}\t{config_path}\tnone")
+        print(f"{timestamp}\t{config_path.name}\t{config_version}\t{config_path}\tnone")
         
         # Create minimal runner for version checking
         runner = PipelineRunner(str(config_path), output_dir="version_check_temp", dry_run=True)

@@ -150,8 +150,8 @@ multiqc Start: 2025-01-15 14:55:10
 multiqc End | Total Runtime: 1.8 seconds | Peak Memory: 0.10 GB | CPU: 9.8 cores
 
 == Logging tool versions =====================================
-Tool versions appended to: /home/jennyd/bactopipe/demo/qc/qc.versions.tsv
-Resource usage appended to: /home/jennyd/bactopipe/demo/qc/qc.resource_usage.tsv
+Tool versions appended to: /home/jennyd/bactopipe/demo/qc/versions.tsv
+Resource usage appended to: /home/jennyd/bactopipe/demo/qc/resource_usage.tsv
 
 ==================================================
 Pipeline completed for qc - all tools
@@ -185,11 +185,11 @@ timestamp            tool     n_ran   mean_memory_gb  mean_cpu  max_cpu  runtime
 
 **Version Tracking: (output file `versions.tsv`)**
 ```
-timestamp            tool                    version              path                           database
-2025-01-15 14:23:10  bactopipe.py           1.1                  /home/user/bactopipe.py       none
-2025-01-15 14:23:10  bactopipe_config.yaml  1.0                  /home/user/demo.yaml          none
-2025-01-15 14:24:16  fastqc                 FastQC v0.12.1       /opt/conda/bin/fastqc         none
-2025-01-15 14:24:16  multiqc                multiqc, version 1.21 /opt/conda/bin/multiqc       none
+timestamp             tool          version                 path                        database
+2025-01-15 14:23:10   bactopipe.py  1.1                     /home/user/bactopipe.py     none
+2025-01-15 14:23:10   demo.yaml     1.0                     /home/user/demo.yaml        none
+2025-01-15 14:24:16   fastqc        FastQC v0.12.1          /opt/conda/bin/fastqc       none
+2025-01-15 14:24:16   multiqc       multiqc, version 1.21   /opt/conda/bin/multiqc      none
 ```
 
 ## Command-Line Options
