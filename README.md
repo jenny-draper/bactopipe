@@ -130,7 +130,7 @@ Timestamp: 2025-01-15 14:23:10
 Tools to run: ['fastqc', 'multiqc']
 
 === Running fastqc ==========================================
-Logging run to: /home/user/bactopipe/demo/qc/logs/fastqc.log
+Logging run to: /home/user/bactopipe/demo/qc/fastqc/fastqc.log
 Logging per-sample tool output to: /home/user/bactopipe/demo/qc/fastqc/*/*.fastqc.log
 Run mode: 20 samples in parallel
 ⚠️  fastqc: missing outputs for 2 samples: sample01, sample02
